@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap">
+  <host>
+    <status state="up"/>
+    <address addr="10.99.0.72" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="8080">
+        <state state="open"/>
+        <service name="http" method="probed" conf="10"/>
+        <script id="http-grep">
+          <table key="(1) http://10.99.0.72:8080/v1/models">
+            <table key="(1) ip"><elem>+ 10.99.0.72</elem></table>
+          </table>
+        </script>
+      </port>
+    </ports>
+  </host>
+</nmaprun>

@@ -1,0 +1,38 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "new_ports",
+      "ip": "192.0.2.10",
+      "ports": [
+        2375
+      ]
+    },
+    "E2": {
+      "category": "service",
+      "ip": "192.0.2.10",
+      "port": 2375,
+      "service": "docker",
+      "authentication": "none"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "A newly open Docker API answers without authentication.",
+  "injection": false,
+  "lookup": {
+    "approved": {
+      "192.0.2.10": [
+        22
+      ]
+    },
+    "current": {
+      "192.0.2.10": [
+        22,
+        2375
+      ]
+    }
+  }
+}

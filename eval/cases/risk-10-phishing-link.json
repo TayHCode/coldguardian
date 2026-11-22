@@ -1,0 +1,21 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "link_feed_hit",
+      "url": "https://verify-receipt.example/session",
+      "feed_age_hours": 2
+    },
+    "E2": {
+      "category": "feed_record",
+      "url": "https://verify-receipt.example/session",
+      "category_in_feed": "phishing"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The submitted URL exactly matches a fresh phishing feed entry.",
+  "injection": false
+}

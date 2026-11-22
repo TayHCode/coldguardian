@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Coldguardian scan report v1",
+  "type": "object",
+  "required": ["schema_version", "profile", "level", "status", "exit_code", "timestamp", "scanner_peak_rss_kib", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "profile": {"enum": ["quick", "deep"]},
+    "level": {"enum": ["low", "medium", "high", null]},
+    "status": {"enum": ["clean", "bad", "incomplete"]},
+    "exit_code": {"type": "integer", "enum": [0, 1, 2]},
+    "timestamp": {"type": ["string", "null"], "format": "date-time"},
+    "scanner_peak_rss_kib": {"type": "integer", "minimum": 1},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "check", "evidence_id"],
+        "additionalProperties": false,
+        "properties": {
+          "category": {"type": "string", "minLength": 1},
+          "check": {"type": "string", "minLength": 1},
+          "finding_id": {"type": "string", "minLength": 1},
+          "evidence_id": {"type": "string", "minLength": 1},
+          "ip": {"type": "string"},
+          "client_ip": {"type": "string"},
+          "host": {"type": "string"},
+          "kind": {"enum": ["auth", "dns"]},
+          "status": {"enum": ["ok", "partial"]},
+          "component": {"type": "string"},
+          "error_type": {"type": "string"},
+          "rule": {"type": "string"},
+          "service": {"type": "string"},
+          "product": {"type": "string"},
+          "auth_methods": {"type": "array", "items": {"type": "string"}},
+          "optional": {"type": "boolean"},
+          "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}},
+          "count": {"type": "integer", "minimum": 0},
+          "host_count": {"type": "integer", "minimum": 0},
+          "log_sources": {"type": "integer", "minimum": 0},
+          "approved_hosts": {"type": "integer", "minimum": 0},
+          "network_complete": {"type": "boolean"},
+          "log_coverage_complete": {"type": "boolean"},
+          "change": {"enum": ["added", "removed"]},
+          "window_seconds": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {"properties": {"status": {"const": "clean"}, "exit_code": {"const": 0}}},
+    {"properties": {"status": {"const": "bad"}, "exit_code": {"const": 1}}},
+    {"properties": {"status": {"const": "incomplete"}, "exit_code": {"const": 2}}}
+  ]
+}

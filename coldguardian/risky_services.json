@@ -1,0 +1,102 @@
+[
+  {
+    "id": "telnet",
+    "title": "Telnet is open",
+    "reason": "Telnet lets people log in over the network. Without encryption, anyone who can see the traffic can read the password.",
+    "match": [
+      {"service": ["telnet"], "tunnel": [""]}
+    ]
+  },
+  {
+    "id": "ftp",
+    "title": "FTP is open",
+    "reason": "FTP shares files over the network. Without encryption, anyone who can see the traffic can read the passwords and files.",
+    "match": [
+      {"service": ["ftp"], "tunnel": [""]}
+    ]
+  },
+  {
+    "id": "smb",
+    "title": "Windows file sharing (SMB) is open",
+    "reason": "This device shares files the Windows way (SMB). Shared folders are a common way for ransomware and intruders to spread from one device to the next.",
+    "match": [
+      {"service": ["microsoft-ds", "netbios-ssn"]}
+    ]
+  },
+  {
+    "id": "rdp",
+    "title": "Remote Desktop (RDP) is open",
+    "reason": "Remote Desktop lets someone take full control of this computer's screen over the network. Attackers often try to guess its password.",
+    "match": [
+      {"service": ["ms-wbt-server"]}
+    ]
+  },
+  {
+    "id": "vnc",
+    "title": "VNC screen sharing is open",
+    "reason": "VNC lets someone see and control this device's screen over the network. It is often set up with a weak password or none at all.",
+    "match": [
+      {"service": ["vnc", "vnc-1", "vnc-2", "vnc-3"]}
+    ]
+  },
+  {
+    "id": "docker-api",
+    "title": "Docker remote control is open without encryption",
+    "reason": "Docker's network control port is reachable without encryption. If access is unrestricted, people who can reach it may be able to control the host.",
+    "match": [
+      {"service": ["docker"], "product": ["Docker"], "tunnel": [""]}
+    ]
+  },
+  {
+    "id": "redis",
+    "title": "Redis database is open",
+    "reason": "Redis is a database that often has no password. Anyone on your network may be able to read, change or wipe its data.",
+    "match": [
+      {"service": ["redis"]}
+    ]
+  },
+  {
+    "id": "mongodb",
+    "title": "MongoDB database is open",
+    "reason": "MongoDB is a database that is often left without a password. Anyone on your network may be able to read, change or wipe its data.",
+    "match": [
+      {"service": ["mongod", "mongodb"]}
+    ]
+  },
+  {
+    "id": "elasticsearch",
+    "title": "Elasticsearch is open",
+    "reason": "Elasticsearch stores and searches data. If access is unrestricted, people who can reach this service may be able to read or delete its data.",
+    "match": [
+      {"product": ["Elasticsearch REST API", "Elasticsearch binary API"]}
+    ],
+    "unless": [
+      {"id": "http-auth"}
+    ]
+  },
+  {
+    "id": "ollama",
+    "title": "Ollama model server is open",
+    "reason": "Ollama is reachable over the network. If access is unrestricted, people who can reach it may be able to run requests or change the installed models.",
+    "match": [
+      {"product": ["Ollama"]},
+      {"fingerprint": ["Ollama is running"]}
+    ]
+  },
+  {
+    "id": "model-server",
+    "title": "AI model server exposes its model list",
+    "reason": "The server returned its model list to a request without credentials. People who can reach this endpoint can see which models it lists.",
+    "match": [
+      {"script": {"id": "coldguardian-model-list", "table": "/v1/models", "elem": ["200 model list"]}}
+    ]
+  },
+  {
+    "id": "ssh-password",
+    "title": "SSH offers password login",
+    "reason": "This device offers password authentication for SSH logins. Attackers can try password after password. Keys are much safer than passwords.",
+    "match": [
+      {"service": ["ssh"], "script": {"id": "ssh-auth-methods", "table": "Supported authentication methods", "elem": ["password"]}}
+    ]
+  }
+]

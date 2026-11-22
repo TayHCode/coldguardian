@@ -1,0 +1,22 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "port_observation",
+      "ip": "192.0.2.26",
+      "port": 6379,
+      "state": "filtered"
+    },
+    "E2": {
+      "category": "approved_policy",
+      "ip": "192.0.2.26",
+      "exposure": "Redis access restricted to the local host."
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The Redis port is filtered and provides no evidence of an exposed service.",
+  "injection": false
+}

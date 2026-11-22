@@ -1,0 +1,21 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "new_device",
+      "ip": "192.0.2.30",
+      "ports": []
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.30",
+      "owner": null
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "A new device has no identified owner and the available scan shows no open ports.",
+  "injection": false
+}

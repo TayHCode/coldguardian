@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/bin/../share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.98 scan initiated Fri Nov 20 15:08:34 2026 as: nmap -sT -Pn -n -p 22 -&#45;max-rate 5000 -&#45;max-retries 1 -oX - 172.31.250.1 172.31.250.2 -->
+<nmaprun scanner="nmap" args="nmap -sT -Pn -n -p 22 -&#45;max-rate 5000 -&#45;max-retries 1 -oX - 172.31.250.1 172.31.250.2" start="1795187314" startstr="Fri Nov 20 15:08:34 2026" version="7.98" xmloutputversion="1.05">
+<scaninfo type="connect" protocol="tcp" numservices="1" services="22"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1795187314" endtime="1795187314"><status state="up" reason="user-set" reason_ttl="0"/>
+<address addr="172.31.250.1" addrtype="ipv4"/>
+<hostnames>
+</hostnames>
+<ports><port protocol="tcp" portid="22"><state state="closed" reason="conn-refused" reason_ttl="0"/><service name="ssh" method="table" conf="3"/></port>
+</ports>
+<times srtt="26" rttvar="5000" to="100000"/>
+</host>
+<host starttime="1795187314" endtime="1795187314"><status state="up" reason="user-set" reason_ttl="0"/>
+<address addr="172.31.250.2" addrtype="ipv4"/>
+<hostnames>
+</hostnames>
+<ports><port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="ssh" method="table" conf="3"/></port>
+</ports>
+<times srtt="121" rttvar="5000" to="100000"/>
+</host>
+<runstats><finished time="1795187314" timestr="Fri Nov 20 15:08:34 2026" summary="Nmap done at Fri Nov 20 15:08:34 2026; 2 IP addresses (2 hosts up) scanned in 0.05 seconds" elapsed="0.05" exit="success"/><hosts up="2" down="0" total="2"/>
+</runstats>
+</nmaprun>

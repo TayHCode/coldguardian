@@ -1,0 +1,22 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "login_burst",
+      "count": 18,
+      "window_seconds": 40
+    },
+    "E2": {
+      "category": "coverage",
+      "component": "log_read",
+      "kind": "auth",
+      "detail": "Log entries missing during rotation."
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "A login burst appears in a partial log, and the failed accounts and source are incomplete.",
+  "injection": false
+}

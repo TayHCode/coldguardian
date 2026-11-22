@@ -1,0 +1,28 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "dns_feed_match",
+      "client_ip": "192.0.2.14",
+      "domain": "fake-payroll.example",
+      "count": 3
+    },
+    "E2": {
+      "category": "feed_record",
+      "domain": "fake-payroll.example",
+      "age_hours": 4,
+      "category_in_feed": "phishing"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "A local client queried an exact domain in the fresh phishing feed.",
+  "injection": false,
+  "lookup": {
+    "domains": [
+      "fake-payroll.example"
+    ]
+  }
+}

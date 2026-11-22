@@ -1,0 +1,26 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.25",
+      "port": 2376,
+      "service": "docker",
+      "authentication": "mutual TLS"
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.25",
+      "owner": "container host",
+      "approved_ports": [
+        2376
+      ]
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The approved Docker service accepts only clients with a trusted certificate.",
+  "injection": false
+}

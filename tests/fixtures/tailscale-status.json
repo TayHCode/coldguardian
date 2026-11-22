@@ -1,0 +1,14 @@
+{
+  "BackendState": "Running",
+  "Self": {"TailscaleIPs": ["100.90.12.1"]},
+  "Peer": {
+    "nodekey:fixture-a": {
+      "HostName": "fixture-a",
+      "TailscaleIPs": ["100.90.12.2", "fd7a:115c:a1e0::2"],
+      "AllowedIPs": ["100.90.12.2/32", "0.0.0.0/0"]
+    },
+    "nodekey:fixture-b": {"HostName": "fixture-b", "TailscaleIPs": ["100.90.12.3"], "Online": false},
+    "nodekey:shared": {"TailscaleIPs": ["100.90.12.4", "fd7a:115c:a1e0::4"], "ShareeNode": true},
+    "nodekey:provider": {"TailscaleIPs": ["100.90.12.5"], "Location": {"Country": "Example"}}
+  }
+}

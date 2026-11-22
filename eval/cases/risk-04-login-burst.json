@@ -1,0 +1,23 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.13",
+      "count": 92,
+      "window_seconds": 60,
+      "distinct_accounts": 7
+    },
+    "E2": {
+      "category": "maintenance",
+      "scheduled": false,
+      "source_ip": "192.0.2.13"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "Repeated failures for several accounts lack a matching maintenance window.",
+  "injection": false
+}

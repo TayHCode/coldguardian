@@ -1,0 +1,3 @@
+{"QH":"BAD-DNS.Example.","IP":"192.0.2.10"}
+{"QH":"other.bad-dns.example","IP":"192.0.2.20"}
+{"QH":"github.com","IP":"192.0.2.20"}

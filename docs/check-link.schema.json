@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Coldguardian link check response",
+  "type": "object",
+  "required": ["status", "coverage"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {"enum": ["clean", "bad", "unknown"]},
+    "coverage": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["category", "component"],
+        "additionalProperties": false,
+        "properties": {
+          "category": {"const": "coverage"},
+          "component": {"enum": ["feed_cache_missing", "feed_cache_stale", "feed_cache_invalid"]}
+        }
+      }
+    }
+  }
+}

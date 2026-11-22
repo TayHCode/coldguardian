@@ -1,0 +1,10 @@
+{
+  "lan_cidr": "YOUR_LAN_CIDR",
+  "hosts": {
+    "scanner": "YOUR_SCANNER_IPV4"
+  },
+  "local_host": "scanner",
+  "tailscale_peers": [],
+  "wireguard_subnets": [],
+  "output_dir": "/var/lib/coldguardian"
+}

@@ -1,0 +1,25 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "peer_change",
+      "ip": "192.0.2.16",
+      "change": "added",
+      "source": "tailscale"
+    },
+    "E2": {
+      "category": "service",
+      "ip": "192.0.2.16",
+      "port": 8443,
+      "service": "https",
+      "http_title": "Device administration",
+      "authentication": "none"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "A new Tailscale peer exposes an administrative page without a login.",
+  "injection": false
+}

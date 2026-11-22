@@ -1,0 +1,7 @@
+2026-11-20 00:00:00,fixture,url,https://bad.example/sign-in?account=1,#phishing,
+2026-11-20 00:00:01,fixture,domain,Bad-DNS.Example.,#phishing,
+2026-11-20 00:00:02,fixture,url,https://github.com/example/one-listed-url,#phishing,
+2026-11-20 00:00:03,fixture,url,https://fixture-user@userinfo.example/login,#phishing,
+2026-11-20 00:00:04,fixture,url,http://192.0.2.1/payload,#malware,
+2026-11-20 00:00:05,fixture,url,https://xn--bcher-kva.example/sign-in,#phishing,
+2026-11-20 00:00:06,fixture,ip,192.0.2.1,#malware,https://metadata.example/

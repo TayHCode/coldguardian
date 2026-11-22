@@ -1,0 +1,39 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.21",
+      "port": 443,
+      "service": "https",
+      "http_title": "NAS admin",
+      "authentication": "required"
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.21",
+      "owner": "storage",
+      "approved_ports": [
+        443
+      ]
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The HTTPS admin page uses a login on the approved NAS and expected port.",
+  "injection": false,
+  "lookup": {
+    "approved": {
+      "192.0.2.21": [
+        443
+      ]
+    },
+    "current": {
+      "192.0.2.21": [
+        443
+      ]
+    }
+  }
+}

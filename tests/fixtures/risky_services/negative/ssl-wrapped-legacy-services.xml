@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap">
+  <host>
+    <status state="up"/>
+    <address addr="10.99.0.73" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="990"><state state="open"/><service name="ftp" tunnel="ssl" method="probed" conf="10"/></port>
+      <port protocol="tcp" portid="992"><state state="open"/><service name="telnet" tunnel="ssl" method="probed" conf="10"/></port>
+    </ports>
+  </host>
+</nmaprun>

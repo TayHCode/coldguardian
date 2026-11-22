@@ -1,0 +1,650 @@
+"""Read-only, inventory-bounded network monitoring."""
+import argparse
+import collections
+from contextlib import contextmanager, nullcontext, redirect_stdout, suppress
+from datetime import datetime, timedelta, timezone
+import fcntl
+import json
+import math
+import os
+from pathlib import Path
+import re
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+from . import feeds, model, notify, wizard
+from .baseline import approved_snapshot, compare_devices, differences
+from .endpoints import validate_ntfy
+from .levels import DEFAULT_LEVEL, LEVELS
+from .lookups import LookupContext
+from .report import (
+    JournalCorruption, atomic_json, journal_rows, load_json, report, safe_finding, saved_finding, scan_document,
+)
+from .scan import config, finding, lan_macs, scan, valid_ip
+from .scope import ScopeError, tailscale_address
+
+
+READ_LIMIT = 1024 * 1024
+MAX_CHUNKS = 32
+COLLECT_SECONDS = 60
+LOGIN_FAILURES = 5
+LOGIN_WINDOW = 60
+AUTH_FAILURE = re.compile(r'Failed (?:password|publickey)|authentication failure|Invalid user', re.I)
+SSH_FAILURE = re.compile(
+    r'^(?:\S+|[A-Z][a-z]{2} +\d{1,2} \d\d:\d\d:\d\d) \S+ '
+    r'sshd(?:-session)?\[\d+\]: Failed (?:password|publickey) for .+ from (\S+) port \d+\b'
+)
+
+
+def auth_client(line):
+    match = re.search(r'\bfrom\s+(\S+)|\brhost=(\S+)', line)
+    return valid_ip(match[1] or match[2]) if match else None
+
+
+def auth_time(line, now):
+    try:
+        return datetime.fromisoformat(line.split(maxsplit=1)[0]).timestamp()
+    except ValueError:
+        for year in (now.year, now.year - 1):
+            try:
+                stamp = datetime.strptime(f'{year} {line[:15]}', '%Y %b %d %H:%M:%S')
+            except ValueError:
+                continue
+            if stamp <= now + timedelta(days=1):
+                return stamp.timestamp()
+    return None
+
+
+def burst_count(times):
+    start, largest = 0, 0
+    times.sort()
+    for end, stamp in enumerate(times):
+        while stamp - times[start] > LOGIN_WINDOW:
+            start += 1
+        largest = max(largest, end - start + 1)
+    return largest
+
+
+def dns_category(domain, suffixes):
+    domain = domain.lower().rstrip('.')
+    if any(domain == s or domain.endswith('.' + s) for s in suffixes):
+        return 'dns_suffix'
+    for label in domain.split('.'):
+        if len(label) >= 40:
+            return 'dns_long_label'
+        if len(label) >= 24:
+            entropy = -sum((n / len(label)) * math.log2(n / len(label)) for n in collections.Counter(label).values())
+            if entropy >= 4:
+                return 'dns_entropy'
+    return None
+
+
+def summarize_logs(data, kind, suffixes, feed_domains=frozenset()):
+    counts = collections.Counter()
+    invalid = 0
+    for line in data.splitlines():
+        if not line.strip():
+            continue
+        if kind == 'dns':
+            try:
+                row = json.loads(line)
+                domain, client = row['QH'], valid_ip(row.get('IP'))
+                if not isinstance(domain, str) or not client:
+                    raise ValueError('invalid DNS row')
+            except (ValueError, TypeError, KeyError):
+                match = re.search(r'query\[[^\]]+\]\s+(\S+)\s+from\s+(\S+)', line)
+                if not match:
+                    invalid += 1
+                    continue
+                domain, client = match[1], valid_ip(match[2])
+                if not client:
+                    invalid += 1
+                    continue
+            category = dns_category(domain, suffixes)
+            if feed_domains and feeds.domain_key(domain) in feed_domains:
+                category = 'dns_feed_match'
+            if category:
+                counts[(category, client)] += 1
+        elif AUTH_FAILURE.search(line):
+            counts[('auth_failed', auth_client(line))] += 1
+    results = [finding(cat, count=count, **({'client_ip': ip} if ip else {})) for (cat, ip), count in sorted(counts.items(), key=lambda item: str(item[0]))]
+    if invalid:
+        results.append(finding('coverage', component='dns_parse', count=invalid))
+    return results
+
+
+def open_log(path):
+    return open(path, 'rb', opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK))
+
+
+def read_log_chunk(log, start, discard_partial=False):
+    limit = READ_LIMIT
+    if discard_partial and start:
+        log.seek(start - 1)
+        if log.read(1) != b'\n':
+            log.readline(READ_LIMIT)
+        limit -= log.tell() - start
+        start = log.tell()
+    else:
+        log.seek(start)
+    chunk = log.read(limit)
+    end = chunk.rfind(b'\n') + 1
+    return chunk[:end].decode('utf-8', 'replace'), start + end
+
+
+def collect_auth(log, info, checkpoint, deadline):
+    identity = f'{info.st_dev}:{info.st_ino}'
+    issues = set()
+    if checkpoint is not None:
+        offset = checkpoint['offset']
+        if type(offset) is not int or offset < 0 or not isinstance(checkpoint['identity'], str):
+            raise ValueError('invalid authentication log checkpoint')
+        if checkpoint['identity'] != identity or offset > info.st_size:
+            offset = 0
+            issues.add('rotated')
+    else:
+        offset = max(0, info.st_size - READ_LIMIT)
+        if offset:
+            issues.add('history_skipped')
+
+    counts = collections.Counter()
+    failed_at = collections.defaultdict(list)
+    now = datetime.now()
+    for index in range(MAX_CHUNKS):
+        if time.monotonic() >= deadline:
+            break
+        data, offset = read_log_chunk(log, offset, index == 0 and 'history_skipped' in issues)
+        checkpoint = {'identity': identity, 'offset': offset}
+        for line in data.splitlines():
+            if not AUTH_FAILURE.search(line):
+                continue
+            counts[auth_client(line)] += 1
+            match = SSH_FAILURE.search(line)
+            if match and (ip := valid_ip(match[1])) and (stamp := auth_time(line, now)) is not None:
+                failed_at[ip].append(stamp)
+        if offset >= info.st_size or not data:
+            break
+    if offset < info.st_size:
+        issues.add('backlog')
+    findings = [
+        finding('auth_failed', count=count, **({'client_ip': ip} if ip else {}))
+        for ip, count in counts.items()
+    ]
+    for ip, times in sorted(failed_at.items()):
+        count = burst_count(times)
+        if count >= LOGIN_FAILURES:
+            findings.append(finding('login_burst', client_ip=ip, count=count, window_seconds=LOGIN_WINDOW))
+    return checkpoint, findings, issues
+
+
+def cached_feed_domains(c):
+    _, domains, warning = feeds.read_cache(Path(c['output_dir']), c.get('feed'))
+    return domains, warning
+
+
+def collect(c, checkpoints, cached_domains=None):
+    host = c['local_host']
+    pending = {key: value for key, value in checkpoints.items() if key.split(':', 2)[:2] == [host, 'auth']}
+    findings = []
+    feed_domains, warning = cached_feed_domains(c) if cached_domains is None else cached_domains
+    if c.get('feed') is not None and warning:
+        findings.append(finding('coverage', component=warning))
+    if host is None:
+        return pending, findings
+    deadline = time.monotonic() + COLLECT_SECONDS
+    paths = [('auth', p) for p in c['auth_paths']] + [('dns', p) for p in c['dns_paths']]
+    for kind, path in paths:
+        if time.monotonic() >= deadline:
+            findings.append(finding('coverage', component='log_backlog', host=host, kind=kind))
+            findings.append(finding('source_summary', host=host, kind=kind, status='partial'))
+            continue
+        try:
+            with open_log(path) as log:
+                info = os.fstat(log.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError('log path must be a regular file')
+                if kind == 'auth':
+                    key = host + ':auth:' + path
+                    checkpoint, rows, issues = collect_auth(log, info, pending.get(key), deadline)
+                    if checkpoint is not None:
+                        pending[key] = checkpoint
+                else:
+                    start = max(0, info.st_size - READ_LIMIT)
+                    data, end = read_log_chunk(log, start, discard_partial=True)
+                    rows = summarize_logs(data, 'dns', c['suspicious_domains'], feed_domains)
+                    issues = {'history_skipped'} if start else set()
+                    if end < info.st_size:
+                        issues.add('backlog')
+            findings.extend(dict(row, host=host, kind=kind) for row in rows)
+        except (OSError, ValueError, TypeError, KeyError):
+            issues = {'read'}
+        findings.append(finding('source_summary', host=host, kind=kind, status='partial' if issues else 'ok'))
+        findings.extend(finding('coverage', component='log_' + issue, host=host, kind=kind) for issue in sorted(issues))
+    return pending, findings
+
+
+def explain_finding(url, key, item, lookup=None):
+    if url is None or item['category'] in (
+        'source_summary', 'scan_summary', 'baseline_approved', 'baseline_enrolled', 'service',
+    ):
+        return None
+
+    def timed_out(*_):
+        raise TimeoutError('model deadline')
+
+    previous_handler = signal.signal(signal.SIGALRM, timed_out)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, model.TIMEOUT)
+    try:
+        return model.explain(url, {key: item}, lookup=lookup)
+    except OSError:
+        return None
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def peer_changes(c, state):
+    if 'tailscale_peers' not in c:
+        return None, []
+    previous = state.get('tailscale_peers', c['tailscale_peers'])
+    findings = []
+    try:
+        if not isinstance(previous, list):
+            raise ValueError('invalid peer snapshot')
+        previous = {str(tailscale_address(ip, 'saved Tailscale peer')) for ip in previous}
+    except ValueError:
+        findings.append(finding('coverage', component='state_read'))
+        previous = None
+    try:
+        observed = wizard.observed_peers(optional=not previous and not c['tailscale_peers'])
+    except (ValueError, TypeError, AttributeError):
+        return None, findings + [finding('coverage', component='tailscale_status')]
+    if previous is None:
+        return observed, findings
+    current = set(observed)
+    return observed, [
+        finding('peer_change', ip=ip, change=change)
+        for change, addresses in (('added', current - previous), ('removed', previous - current))
+        for ip in sorted(addresses)
+    ]
+
+
+@contextmanager
+def output_lock(outdir):
+    outdir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if outdir.is_symlink():
+        raise ValueError('output directory cannot be a symlink')
+    os.chmod(outdir, 0o700)
+    lockfd = os.open(outdir / '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lockfd, 'w') as lock:
+        os.fchmod(lock.fileno(), 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+        else:
+            yield True
+
+
+def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=None,
+        scan_command=False, json_output=False):
+    outdir = Path(c['output_dir'])
+    with output_lock(outdir) as locked:
+        if not locked:
+            result = [finding('coverage', component='overlapping_run')]
+            print(json.dumps(scan_document(result, profile, c['level'])) if json_output
+                  else '# Coldguardian\n\n- {"category":"coverage","component":"overlapping_run"}')
+            return 2
+        findings = []
+        retention = c['_report_retention']
+        try:
+            state = load_json(outdir / 'state.json', {})
+            if not isinstance(state, dict) or not isinstance(state.get('checkpoints', {}), dict):
+                raise ValueError('invalid state')
+        except (OSError, ValueError):
+            state = {}
+            findings.append(finding('coverage', component='state_read'))
+        if approve:
+            for _ in journal_rows(outdir):
+                pass
+            try:
+                baseline = approved_snapshot(state, c)
+                with suppress(ValueError, TypeError, AttributeError):
+                    existing = approved_snapshot({'snapshot': dict(load_json(outdir / 'baseline.json'), complete=True)}, c)
+                    if 'approvals' in existing:
+                        baseline['approvals'] = existing['approvals']
+                atomic_json(outdir / 'baseline.json', baseline)
+                report(outdir, [finding('baseline_approved')], pinned=state.get('report_timestamp'), **retention)
+                return 0
+            except (OSError, ValueError, TypeError, KeyError):
+                report(outdir, [finding('coverage', component='baseline_approval')],
+                       pinned=state.get('report_timestamp'), **retention)
+                return 2
+        approved, baseline_error = None, False
+        try:
+            baseline = load_json(outdir / 'baseline.json')
+            if baseline is not None and baseline['fingerprint'] == c['_fingerprint']:
+                approved = approved_snapshot({'snapshot': dict(baseline, complete=True)}, c)
+        except (OSError, ValueError, TypeError, KeyError):
+            baseline_error = True
+        if profile == 'deep':
+            if c['_port_count'] < 65535:
+                top_ports = None
+            elif top_ports is None:
+                top_ports = LEVELS[c['level']].deep_top_ports
+        peers, peer_findings = (
+            peer_changes(c, state) if confirm_baseline is None else (c.get('tailscale_peers'), [])
+        )
+        approved_hosts = approved['hosts'] if approved is not None else None
+        snapshot, scan_findings = scan(c, profile, approved_hosts, top_ports, observed_peers=peers or ())
+        macs = lan_macs(snapshot, c['_lan']) if snapshot else {}
+        findings.extend(scan_findings)
+        network_complete = not any(f['category'] == 'coverage' and f.get('component') != 'host_offline' for f in scan_findings)
+        if baseline_error:
+            findings.append(finding('coverage', component='baseline_read'))
+        elif baseline is None:
+            findings.append(finding('baseline_missing'))
+            findings.extend(finding('observed_host', ip=ip, ports=ports) for ip, ports in sorted(snapshot.items()))
+        elif approved is None:
+            findings.append(finding('baseline_mismatch'))
+        elif c['level'] == 'high' or not network_complete:
+            findings.extend(differences(snapshot, approved_hosts, compare_missing_ports=top_ports is None))
+        else:
+            risky_ips = {f['ip'] for f in scan_findings if f['category'] == 'risky_service'}
+            findings.extend(compare_devices(snapshot, approved, macs, risky_ips, compare_missing_ports=top_ports is None))
+        findings.extend(peer_findings)
+        cached_domains = cached_feed_domains(c)
+        checkpoints, log_findings = collect(c, state.get('checkpoints', {}), cached_domains)
+        findings.extend(log_findings)
+        findings.insert(0, finding('scan_summary', host_count=len(snapshot), network_complete=network_complete, log_sources=sum(f['category'] == 'source_summary' for f in log_findings), log_coverage_complete=not any(f['category'] == 'coverage' for f in log_findings)))
+        approvals = [entry['finding'] for entry in (approved or {}).get('approvals', [])]
+
+        def notify_pending():
+            return notify.deliver_notification(
+                state, findings, lambda: atomic_json(outdir / 'state.json', state),
+                level=c.get('level', DEFAULT_LEVEL), target=c.get('ntfy', notify.LEGACY_TARGET),
+                approvals=approvals,
+            )
+
+        def save_scan(stamp):
+            try:
+                previous = approved_snapshot(state, c)['hosts']
+            except (AttributeError, ValueError, TypeError, KeyError):
+                previous = {}
+            state.update(checkpoints=checkpoints, snapshot={'fingerprint': c['_fingerprint'], 'complete': network_complete, 'hosts': snapshot},
+                         report_timestamp=stamp, previous_hosts=previous)
+            if macs:
+                state['snapshot']['macs'] = macs
+            if peers is not None:
+                state['tailscale_peers'] = peers
+            atomic_json(outdir / 'state.json', state)
+
+        record = report(outdir, findings, notify=notify_pending if confirm_baseline is None else None,
+                        emit=not json_output, pinned=state.get('report_timestamp'), save_scan=save_scan,
+                        **retention)
+        if confirm_baseline is not None:
+            try:
+                baseline = approved_snapshot(state, c)
+            except ValueError:
+                print('The scan did not produce a complete baseline.', file=sys.stderr)
+                return 2
+            if not confirm_baseline():
+                print('Baseline left unapproved.')
+                return 2
+            atomic_json(outdir / 'baseline.json', baseline)
+            print(f"Approved {outdir / 'baseline.json'}")
+            return 0
+        if scan_command:
+            document = scan_document(findings, profile, c['level'], record)
+            if json_output:
+                print(json.dumps(document, sort_keys=True))
+            return document['exit_code']
+        return 1 if any(f['category'] not in ('scan_summary', 'source_summary', 'service') for f in findings) else 0
+
+
+def approve_finding(c, finding_id, reason):
+    if not reason or not reason.strip():
+        raise ValueError('A nonempty --reason is required.')
+    outdir = Path(c['output_dir'])
+    with output_lock(outdir) as locked:
+        if not locked:
+            raise ValueError('Another monitoring run is active.')
+        row, key, item = saved_finding(outdir, finding_id)
+        state = load_json(outdir / 'state.json', {})
+        if (row['timestamp'] != state.get('report_timestamp')
+                or state['snapshot']['fingerprint'] != c['_fingerprint']):
+            raise ValueError('Approve findings from the latest scan for this configuration.')
+        item = safe_finding(item)
+        if item['category'] in ('coverage', *notify.PAGE_NOTES) or not notify.notification_items([item]):
+            raise ValueError('This finding cannot be approved.')
+        path = outdir / 'baseline.json'
+        baseline = approved_snapshot({'snapshot': dict(load_json(path, {}), complete=True)}, c)
+        approvals = baseline.setdefault('approvals', [])
+        if any(entry['finding'] == item for entry in approvals):
+            return 1, {'status': 'already_approved'}
+        approval = {
+            'finding_id': f"{row['timestamp']}:{key}",
+            'finding': item,
+            'reason': reason,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }
+        approvals.append(approval)
+        atomic_json(path, baseline)
+        return 0, {'status': 'approved', 'approval': approval}
+
+
+def explain_saved_finding(c, finding_id):
+    outdir = Path(c['output_dir'])
+    row, key, item = saved_finding(outdir, finding_id)
+    lookup = None
+    if c['model_url']:
+        state = load_json(outdir / 'state.json', {})
+        snapshot = state.get('snapshot', {})
+        if (state.get('report_timestamp') == row['timestamp']
+                and snapshot.get('fingerprint') == c['_fingerprint']):
+            baseline = load_json(outdir / 'baseline.json') or {}
+            approved = baseline.get('hosts', {}) if baseline.get('fingerprint') == c['_fingerprint'] else {}
+            lookup = LookupContext(c, approved, state.get('previous_hosts', {}), snapshot['hosts'],
+                                   row['findings'], *cached_feed_domains(c))
+    explanation = explain_finding(c['model_url'], key, item, lookup)
+    if explanation is None:
+        raise ValueError('Local model explanation is unavailable for this finding.')
+    code = scan_document([item], None, c['level'])['exit_code']
+    return code, {'status': ('clean', 'bad', 'incomplete')[code], 'explanation': explanation}
+
+
+def finding_command(args):
+    command = args.feed_command
+    try:
+        if not args.config:
+            raise ValueError('Missing configuration.')
+        c = config(json.loads(Path(args.config).read_text()))
+        if command == 'approve':
+            code, result = approve_finding(c, args.finding_id, args.reason)
+        else:
+            code, result = explain_saved_finding(c, args.finding_id)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        code, result = 2, {'status': 'failed', 'error_type': type(error).__name__}
+        print(error, file=sys.stderr)
+    if args.json:
+        print(json.dumps(dict(result, command=command, finding_id=args.finding_id, exit_code=code)))
+    elif 'explanation' in result:
+        explanation = result['explanation']
+        print(f"{explanation['label']}: {explanation['reason']}")
+        if explanation['missing']:
+            print('Missing evidence: ' + ', '.join(explanation['missing']))
+    elif code != 2:
+        print('Finding approved.' if code == 0 else 'Finding was already approved.')
+    return code
+
+
+def management_command(args):
+    command = args.feed_command
+    with redirect_stdout(sys.stderr) if args.json else nullcontext():
+        if command == 'feeds':
+            command = 'feeds update'
+            code = feeds.run_command(args)
+            status = 'ok' if code == 0 else 'failed'
+        else:
+            try:
+                if command == 'setup':
+                    code, status = wizard.setup(run)
+                else:
+                    code, status = wizard.uninstall(), 'ok'
+            except (EOFError, KeyboardInterrupt):
+                print('Canceled.', file=sys.stderr)
+                code, status = 2, 'canceled'
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                print(error, file=sys.stderr)
+                code, status = 2, 'failed'
+    if args.json:
+        print(json.dumps(dict(command=command, status=status, exit_code=code)))
+    return code
+
+
+def status_command(args):
+    path = Path(args.config) if args.config else wizard.setup_config()
+    try:
+        settings = json.loads(path.read_text())
+        if not isinstance(settings, dict):
+            raise ValueError('configuration must be an object')
+        config(settings)
+    except (OSError, TypeError, ValueError):
+        code, status = 2, 'failed'
+        print('Could not read or validate the Coldguardian configuration.', file=sys.stderr)
+    else:
+        code, status = 0, 'ok'
+        if not args.json:
+            print('Coldguardian configuration is valid.')
+    if args.json:
+        print(json.dumps(dict(command='status', status=status, exit_code=code)))
+    return code
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config')
+    commands = parser.add_subparsers(dest='feed_command')
+    setup = commands.add_parser('setup', help='Configure Coldguardian and approve the first scan')
+    setup.add_argument('--json', action='store_true', help='Print the outcome as JSON')
+    uninstall = commands.add_parser('uninstall', help='Remove setup-managed units, configuration, and state')
+    uninstall.add_argument('--json', action='store_true', help='Print the outcome as JSON')
+    status = commands.add_parser('status', help='Check local configuration without scanning')
+    status.add_argument('--config', default=argparse.SUPPRESS)
+    status.add_argument('--json', action='store_true')
+    scan_parser = commands.add_parser('scan', help='Run a network scan and write a report')
+    scan_parser.add_argument('--config', default=argparse.SUPPRESS)
+    scan_parser.add_argument('--json', action='store_true')
+    scan_modes = scan_parser.add_mutually_exclusive_group()
+    scan_modes.add_argument('--quick', action='store_true', default=argparse.SUPPRESS)
+    scan_modes.add_argument('--deep', action='store_true', default=argparse.SUPPRESS)
+    check_link = commands.add_parser('check-link', help='Check a link against the local cache')
+    check_link.add_argument('url')
+    check_link.add_argument('--config', default=argparse.SUPPRESS)
+    check_link.add_argument('--json', action='store_true')
+    explain_parser = commands.add_parser('explain', help='Explain one saved finding with the local model')
+    approve_parser = commands.add_parser('approve', help='Record a human approval for one finding')
+    approve_parser.add_argument('--reason')
+    for finding_parser in (explain_parser, approve_parser):
+        finding_parser.add_argument('finding_id')
+        finding_parser.add_argument('--config', default=argparse.SUPPRESS)
+        finding_parser.add_argument('--json', action='store_true')
+    feed_commands = commands.add_parser('feeds', help='Manage the local feed cache').add_subparsers(required=True)
+    feed_update = feed_commands.add_parser('update', help='Refresh the cache from the configured source')
+    feed_update.add_argument('--config', default=argparse.SUPPRESS)
+    feed_update.add_argument('--json', action='store_true', help='Print the outcome as JSON')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--approve-baseline', action='store_true')
+    modes.add_argument('--test-notification', action='store_true')
+    modes.add_argument('--notify-failure', action='store_true')
+    modes.add_argument('--quick', action='store_true', help='scan known hosts on baseline ports (default)')
+    modes.add_argument('--deep', action='store_true', help='scan the whole scope, all TCP ports, with service names; takes minutes')
+    args = parser.parse_args(argv)
+    if args.feed_command == 'status':
+        if args.approve_baseline or args.test_notification or args.notify_failure or args.quick or args.deep:
+            parser.error('status cannot be combined with another mode')
+        return status_command(args)
+    if args.feed_command in ('setup', 'uninstall'):
+        if args.config or args.approve_baseline or args.test_notification or args.notify_failure or args.quick or args.deep:
+            parser.error('setup and uninstall use the default paths and cannot be combined with other modes')
+        return management_command(args)
+    if not args.config and wizard.setup_config().is_file():
+        args.config = str(wizard.setup_config())
+    if args.feed_command in ('explain', 'approve'):
+        if args.approve_baseline or args.test_notification or args.notify_failure or args.quick or args.deep:
+            parser.error('finding commands cannot be combined with another mode')
+        return finding_command(args)
+    scan_command = args.feed_command == 'scan'
+    json_output = scan_command and args.json
+    profile = 'deep' if args.deep else 'quick'
+    if scan_command:
+        if args.approve_baseline or args.test_notification or args.notify_failure or (args.quick and args.deep):
+            parser.error('scan cannot be combined with another mode')
+    elif args.feed_command:
+        if args.approve_baseline or args.test_notification or args.notify_failure:
+            parser.error('feed commands cannot be combined with other modes')
+        if not args.config:
+            parser.error('--config is required for feed commands')
+        if args.feed_command == 'feeds':
+            return management_command(args)
+        return feeds.run_command(args)
+    if args.test_notification or args.notify_failure:
+        target = notify.LEGACY_TARGET
+        if args.config and (Path(args.config).is_file() or notify.TOPIC_ENV not in os.environ):
+            try:
+                settings = json.loads(Path(args.config).read_text())
+                if 'ntfy' in settings:
+                    target = settings['ntfy']
+                    if target is not None:
+                        target = validate_ntfy(target)
+            except (OSError, ValueError, TypeError):
+                print('Could not read notification configuration.', file=sys.stderr)
+                return 2
+        outcome = notify.send(mode='test' if args.test_notification else 'failure', target=target)
+        if outcome['status'] == 'accepted':
+            print('Notification accepted.' + (' ID: ' + outcome['id'] if 'id' in outcome else ''))
+            return 0
+        print('Notification disabled.' if outcome['status'] == 'disabled' else 'Notification failed (' + outcome['error_type'] + ').')
+        return 0 if outcome['status'] == 'disabled' else 2
+    if not args.config and not json_output:
+        parser.error('--config is required for normal runs')
+    try:
+        if not args.config:
+            raise ValueError('missing configuration')
+        c = config(json.loads(Path(args.config).read_text()))
+        if args.deep:
+            print('Deep scan started. It can take several minutes.', file=sys.stderr)
+        if scan_command:
+            return run(c, profile=profile, scan_command=True, json_output=json_output)
+        return run(c, args.approve_baseline, profile)
+    except Exception as error:
+        expected = isinstance(error, (OSError, ValueError, TypeError, KeyError, AttributeError))
+        if not json_output and not expected:
+            raise
+        component = 'configuration_or_io' if expected else 'scan_error'
+        failure = finding('coverage', component=component, error_type=type(error).__name__)
+        if json_output:
+            print(json.dumps(scan_document([failure], profile, c['level'] if 'c' in locals() else None)))
+        else:
+            print('# Coldguardian\n\n' + json.dumps(failure))
+        if isinstance(error, (ScopeError, JournalCorruption)):
+            print(error, file=sys.stderr)
+        if 'c' in locals() and not json_output and not isinstance(error, JournalCorruption):
+            try:
+                outdir = Path(c['output_dir'])
+                with output_lock(outdir) as locked:
+                    if locked:
+                        pinned = None
+                        with suppress(ValueError, AttributeError):
+                            pinned = load_json(outdir / 'state.json', {}).get('report_timestamp')
+                        report(outdir, [failure], pinned=pinned, **c['_report_retention'])
+            except (OSError, ValueError):
+                pass
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

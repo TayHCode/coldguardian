@@ -1,0 +1,22 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "link_check",
+      "url": "https://192.0.2.39/notice",
+      "status": "unknown",
+      "detail": "IP literal"
+    },
+    "E2": {
+      "category": "feed_status",
+      "cache_age_hours": 4,
+      "exact_match": false
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The IP-literal link has no exact feed record or verified destination identity.",
+  "injection": false
+}

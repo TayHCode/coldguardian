@@ -1,0 +1,23 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "peer_change",
+      "ip": "192.0.2.36",
+      "change": "added",
+      "source": "tailscale"
+    },
+    "E2": {
+      "category": "coverage",
+      "ip": "192.0.2.36",
+      "component": "network",
+      "detail": "Peer did not answer."
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "A new peer is listed, but its owner and open services could not be confirmed.",
+  "injection": false
+}

@@ -1,0 +1,23 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.20",
+      "count": 27,
+      "window_seconds": 60
+    },
+    "E2": {
+      "category": "maintenance",
+      "source_ip": "192.0.2.20",
+      "scheduled": true,
+      "owner_confirmation": "Backup retries during key rotation."
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The owner confirmed the failed retries came from the scheduled backup after key rotation.",
+  "injection": false
+}

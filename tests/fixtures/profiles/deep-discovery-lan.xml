@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/bin/../share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.98 scan initiated Fri Nov 20 15:08:34 2026 as: nmap -sn -n -PS22,80,443,445,3389,11434 -oX - 172.31.250.0/29 -->
+<nmaprun scanner="nmap" args="nmap -sn -n -PS22,80,443,445,3389,11434 -oX - 172.31.250.0/29" start="1795187314" startstr="Fri Nov 20 15:08:34 2026" version="7.98" xmloutputversion="1.05">
+<verbose level="0"/>
+<debugging level="0"/>
+<host><status state="up" reason="conn-refused" reason_ttl="0"/>
+<address addr="172.31.250.1" addrtype="ipv4"/>
+<hostnames>
+</hostnames>
+<times srtt="814" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="syn-ack" reason_ttl="0"/>
+<address addr="172.31.250.2" addrtype="ipv4"/>
+<hostnames>
+</hostnames>
+<times srtt="562" rttvar="3896" to="100000"/>
+</host>
+<runstats><finished time="1795187316" timestr="Fri Nov 20 15:08:36 2026" summary="Nmap done at Fri Nov 20 15:08:36 2026; 8 IP addresses (2 hosts up) scanned in 1.51 seconds" elapsed="1.51" exit="success"/><hosts up="2" down="6" total="8"/>
+</runstats>
+</nmaprun>

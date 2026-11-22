@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sT -sV -Pn -n -p 1-65535 --script ssh-auth-methods,http-title,http-server-header,http-auth -oX - 10.99.0.67" start="1795000000" startstr="Fri Nov 20 09:00:00 2026" version="7.94" xmloutputversion="1.05">
+<scaninfo type="connect" protocol="tcp" numservices="65535" services="1-65535"/>
+<host starttime="1795000000" endtime="1795000060"><status state="up" reason="user-set" reason_ttl="0"/>
+<address addr="10.99.0.67" addrtype="ipv4"/>
+<hostnames></hostnames>
+<ports><extraports state="closed" count="65534"><extrareasons reason="conn-refused" count="65534"/></extraports>
+<port protocol="tcp" portid="2375"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="docker" method="table" conf="3"/></port>
+</ports>
+<times srtt="400" rttvar="200" to="100000"/>
+</host>
+<runstats><finished time="1795000060" timestr="Fri Nov 20 09:01:00 2026" summary="Nmap done at Fri Nov 20 09:01:00 2026; 1 IP address (1 host up) scanned in 60.00 seconds" elapsed="60.00" exit="success"/><hosts up="1" down="0" total="1"/></runstats>
+</nmaprun>

@@ -1,0 +1,7 @@
+.worktrees/
+__pycache__/
+*.egg-info/
+build/
+dist/
+config.json
+state/

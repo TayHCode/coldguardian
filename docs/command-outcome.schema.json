@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Coldguardian command outcome",
+  "type": "object",
+  "required": ["command", "status", "exit_code"],
+  "additionalProperties": false,
+  "properties": {
+    "command": {"enum": ["setup", "uninstall", "feeds update", "status"]},
+    "status": {"enum": ["ok", "declined", "incomplete", "canceled", "failed"]},
+    "exit_code": {"type": "integer", "enum": [0, 2]}
+  },
+  "oneOf": [
+    {"properties": {"status": {"const": "ok"}, "exit_code": {"const": 0}}},
+    {"properties": {"command": {"const": "setup"}, "status": {"const": "declined"}, "exit_code": {"const": 0}}},
+    {"properties": {"command": {"const": "setup"}, "status": {"const": "incomplete"}, "exit_code": {"const": 2}}},
+    {"properties": {"command": {"enum": ["setup", "uninstall"]}, "status": {"const": "canceled"}, "exit_code": {"const": 2}}},
+    {"properties": {"status": {"const": "failed"}, "exit_code": {"const": 2}}}
+  ]
+}

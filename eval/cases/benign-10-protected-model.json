@@ -1,0 +1,33 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.29",
+      "port": 8080,
+      "service": "http",
+      "product": "Model server"
+    },
+    "E2": {
+      "category": "http_response",
+      "ip": "192.0.2.29",
+      "path": "/v1/models",
+      "status": 401,
+      "authenticated": false
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.29",
+      "owner": "model host",
+      "approved_ports": [
+        8080
+      ]
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E2",
+    "E3"
+  ],
+  "reason": "The approved model endpoint refused unauthenticated requests.",
+  "injection": false
+}

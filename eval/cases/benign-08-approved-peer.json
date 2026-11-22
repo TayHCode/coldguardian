@@ -1,0 +1,23 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "peer_change",
+      "ip": "192.0.2.27",
+      "change": "added",
+      "source": "tailscale"
+    },
+    "E2": {
+      "category": "owner_confirmation",
+      "ip": "192.0.2.27",
+      "device": "replacement tablet",
+      "confirmed": true
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "A replacement device matches the owner-approved peer enrollment.",
+  "injection": false
+}

@@ -1,0 +1,38 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.23",
+      "port": 32400,
+      "service": "http",
+      "product": "Media server"
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.23",
+      "owner": "media",
+      "approved_ports": [
+        32400
+      ]
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The service and port match the approved media server.",
+  "injection": false,
+  "lookup": {
+    "approved": {
+      "192.0.2.23": [
+        32400
+      ]
+    },
+    "current": {
+      "192.0.2.23": [
+        32400
+      ]
+    }
+  }
+}

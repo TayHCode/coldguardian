@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap">
+  <host>
+    <status state="up"/>
+    <address addr="10.99.0.71" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="21"><state state="open"/><service name="ftp" method="table" conf="3"/></port>
+      <port protocol="tcp" portid="23"><state state="open"/><service name="telnet" method="table" conf="3"/></port>
+      <port protocol="tcp" portid="445"><state state="open"/><service name="microsoft-ds" method="table" conf="3"/></port>
+      <port protocol="tcp" portid="3389"><state state="open"/><service name="ms-wbt-server" method="table" conf="3"/></port>
+      <port protocol="tcp" portid="5900"><state state="open"/><service name="vnc" method="table" conf="3"/></port>
+      <port protocol="tcp" portid="6379"><state state="open"/><service name="redis" method="table" conf="3"/></port>
+      <port protocol="tcp" portid="27017"><state state="open"/><service name="mongod" method="table" conf="3"/></port>
+    </ports>
+  </host>
+</nmaprun>

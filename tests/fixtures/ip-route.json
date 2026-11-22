@@ -1,0 +1,7 @@
+[
+  {"dst": "default", "gateway": "172.22.40.1", "dev": "enp1s0", "protocol": "dhcp", "metric": 100},
+  {"dst": "172.22.40.0/24", "dev": "enp1s0", "protocol": "kernel", "scope": "link", "prefsrc": "172.22.40.11"},
+  {"dst": "10.73.24.0/24", "dev": "wg0", "protocol": "kernel", "scope": "link", "prefsrc": "10.73.24.3"},
+  {"dst": "10.240.0.0/16", "dev": "br0", "protocol": "kernel", "scope": "link", "prefsrc": "10.240.0.1"},
+  {"dst": "10.241.0.0/16", "gateway": "172.22.40.1", "dev": "enp1s0"}
+]

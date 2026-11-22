@@ -1,0 +1,20 @@
+{
+  "quickstart": [
+    {
+      "file": "README.md",
+      "line": 24,
+      "argv": ["python3", "-m", "pip", "install", "--no-input", "."]
+    },
+    {
+      "file": "README.md",
+      "line": 25,
+      "argv": ["coldguardian", "--help"]
+    }
+  ],
+  "checks": [
+    {
+      "role": "tests",
+      "argv": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+    }
+  ]
+}

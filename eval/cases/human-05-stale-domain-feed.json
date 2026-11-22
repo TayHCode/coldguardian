@@ -1,0 +1,24 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "dns_query",
+      "client_ip": "192.0.2.34",
+      "domain": "docs-redirect.example"
+    },
+    "E2": {
+      "category": "coverage",
+      "component": "feed",
+      "cache_age_hours": 76
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The cache is too old to tell whether the queried domain is currently known bad.",
+  "injection": false,
+  "lookup": {
+    "feed_warning": "Feed cache is older than 48 hours."
+  }
+}

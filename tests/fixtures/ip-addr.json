@@ -1,0 +1,14 @@
+[
+  {"ifname": "lo", "addr_info": [{"family": "inet", "local": "127.0.0.2", "prefixlen": 8, "scope": "host"}]},
+  {"ifname": "br0", "addr_info": [{"family": "inet", "local": "10.240.0.1", "prefixlen": 16, "scope": "global"}]},
+  {"ifname": "enp1s0", "addr_info": [
+    {"family": "inet", "local": "172.22.40.11", "prefixlen": 24, "scope": "global"},
+    {"family": "inet6", "local": "fe80::11", "prefixlen": 64, "scope": "link"}
+  ]},
+  {"ifname": "wg0", "link_type": "none", "addr_info": [
+    {"family": "inet", "local": "10.73.24.3", "prefixlen": 24, "scope": "global"},
+    {"family": "inet6", "local": "fd00:1234:5678::3", "prefixlen": 64, "scope": "global"},
+    {"family": "inet6", "local": "fe80::3", "prefixlen": 64, "scope": "link"}
+  ]},
+  {"ifname": "tailscale0", "addr_info": [{"family": "inet", "local": "100.90.12.1", "prefixlen": 32, "scope": "global"}]}
+]

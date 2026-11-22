@@ -1,0 +1,3 @@
+Jan  1 00:00:00 dnsmasq[1234]: query[A] clean.example from 192.0.2.10
+Jan  1 00:00:01 dnsmasq[1234]: query[AAAA] bad-dns.example from 192.0.2.10
+Jan  1 00:00:02 dnsmasq[1234]: query[A] github.com from 192.0.2.20

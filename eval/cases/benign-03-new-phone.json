@@ -1,0 +1,22 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "new_device",
+      "ip": "192.0.2.22",
+      "ports": []
+    },
+    "E2": {
+      "category": "owner_confirmation",
+      "ip": "192.0.2.22",
+      "device": "replacement phone",
+      "confirmed": true
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The owner confirmed the new phone, which has no observed open ports.",
+  "injection": false
+}

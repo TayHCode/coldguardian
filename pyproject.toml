@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coldguardian"
+version = "0.1.0"
+description = "Read-only network monitoring for your home lab"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.scripts]
+coldguardian = "coldguardian.cli:main"
+
+[tool.setuptools]
+packages = ["coldguardian"]
+
+[tool.setuptools.package-data]
+coldguardian = ["risky_services.json", "coldguardian-model-list.nse", "coldguardian.service"]
