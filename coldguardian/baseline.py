@@ -1,4 +1,5 @@
 from collections import Counter
+import re
 
 from .scan import finding, valid_mac
 from .scope import check_snapshot_scope
@@ -63,6 +64,14 @@ def approved_snapshot(state, c):
         ):
             raise ValueError('invalid baseline approvals')
         approved['approvals'] = approvals
+    if 'persistence' in snapshot:
+        hashes = snapshot['persistence']
+        if not isinstance(hashes, dict) or not all(
+            isinstance(path, str) and path.startswith('/') and isinstance(digest, str)
+            and re.fullmatch('[0-9a-f]{64}', digest) for path, digest in hashes.items()
+        ):
+            raise ValueError('invalid persistence baseline')
+        approved['persistence'] = hashes
     if 'macs' in snapshot:
         macs = snapshot['macs']
         if not isinstance(macs, dict) or any(ip not in hosts or not valid_mac(mac) for ip, mac in macs.items()):

@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from . import dnswatch, feeds, model, notify, triage, wizard
+from . import dnswatch, exposure, feeds, hostwatch, model, notify, triage, wizard
 from .baseline import approved_snapshot, compare_devices, differences
 from .endpoints import validate_ntfy
 from .levels import DEFAULT_LEVEL, LEVELS
@@ -319,7 +319,7 @@ def output_lock(outdir):
 
 
 def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=None,
-        scan_command=False, json_output=False):
+        scan_command=False, json_output=False, setup_inventory=False):
     outdir = Path(c['output_dir'])
     with output_lock(outdir) as locked:
         if not locked:
@@ -341,8 +341,14 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
                 pass
             try:
                 baseline = approved_snapshot(state, c)
+                if not c.get('host_watch'):
+                    baseline.pop('persistence', None)
                 with suppress(ValueError, TypeError, AttributeError):
                     existing = approved_snapshot({'snapshot': dict(load_json(outdir / 'baseline.json'), complete=True)}, c)
+                    if 'persistence' in existing and (
+                        'persistence' not in baseline or state['snapshot'].get('persistence_complete') is False
+                    ):
+                        baseline['persistence'] = existing['persistence'] | baseline.get('persistence', {})
                     if 'approvals' in existing:
                         baseline['approvals'] = existing['approvals']
                 atomic_json(outdir / 'baseline.json', baseline)
@@ -399,11 +405,17 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
             risky_ips = {f['ip'] for f in scan_findings if f['category'] == 'risky_service'}
             findings.extend(compare_devices(snapshot, approved, macs, risky_ips, compare_missing_ports=top_ports is None))
         findings.extend(peer_findings)
+        exposure_findings, exposure_status = exposure.collect(c)
+        findings.extend(exposure_findings)
+        network_complete = network_complete and 'incomplete' not in exposure_status.values()
+        if c.get('host_watch'):
+            host_findings, hashes, watch_status = hostwatch.collect(c, approved)
+            findings.extend(host_findings)
         cached_domains = cached_feed_domains(c)
         checkpoints, log_findings = collect(c, state.get('checkpoints', {}), cached_domains)
         findings.extend(log_findings)
         findings.insert(0, finding('scan_summary', host_count=len(snapshot), network_complete=network_complete, log_sources=sum(f['category'] == 'source_summary' for f in log_findings), log_coverage_complete=not any(f['category'] == 'coverage' for f in log_findings)))
-        complete = not any(f['category'] == 'coverage' and not f.get('optional') for f in findings)
+        gaps = {f.get('component') for f in findings if f['category'] == 'coverage' and not f.get('optional')}
         if confirm_baseline is None:
             dns_complete = not any(f['category'] == 'coverage' for f in log_findings)
             triage.classify(c, findings, snapshot, macs, (approved or {}).get('macs', {}),
@@ -411,14 +423,14 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
         approvals = [entry['finding'] for entry in (approved or {}).get('approvals', [])]
 
         last_success = scan_timestamps(c, state)
-        if complete and approved is not None:
+        if gaps <= hostwatch.GAPS.keys() and approved is not None:
             last_success[profile] = int(time.time())
 
         def notify_pending(stamp):
             heartbeat = None
             if 'tiers' in c:
                 health = freshness(c, last_success)
-                if any(v['status'] not in ('fresh', 'unscheduled') for v in health.values()) or not complete:
+                if any(v['status'] not in ('fresh', 'unscheduled') for v in health.values()) or gaps:
                     heartbeat = 'Monitoring is incomplete. Check coldguardian status --json and the local report.'
                 elif any(f.get('delivery_class') == 'hard_page' for f in findings):
                     heartbeat = 'Monitoring is current. Threat findings are in the local report.'
@@ -437,8 +449,16 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
                 previous = {}
             state.update(last_success=last_success, checkpoints=checkpoints, snapshot={'fingerprint': c['_fingerprint'], 'complete': network_complete, 'hosts': snapshot},
                          report_timestamp=stamp, previous_hosts=previous)
+            if c.get('host_watch'):
+                state['snapshot']['host_watch'] = watch_status
+                state['snapshot']['persistence'] = hashes
+                state['snapshot']['persistence_complete'] = 'host_persistence' not in gaps
             if macs:
                 state['snapshot']['macs'] = macs
+            if exposure_status:
+                state['exposure'] = {k: {'config': c[k], 'status': v} for k, v in exposure_status.items()}
+            else:
+                state.pop('exposure', None)
             if peers is not None:
                 state['tailscale_peers'] = peers
             atomic_json(outdir / 'state.json', state)
@@ -458,12 +478,15 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
             atomic_json(outdir / 'baseline.json', baseline)
             print(f"Approved {outdir / 'baseline.json'}")
             return 0
+        if setup_inventory:
+            inventory = [f for f in findings if f.get('scope') != hostwatch.SCOPE]
+            return scan_document(inventory, profile, c['level'])['exit_code']
         if scan_command:
             document = scan_document(findings, profile, c['level'], record)
             if json_output:
                 print(json.dumps(document, sort_keys=True))
             return document['exit_code']
-        return 1 if any(f['category'] not in ('scan_summary', 'source_summary', 'service') for f in findings) else 0
+        return 1 if any(f['category'] not in ('scan_summary', 'source_summary', 'host_listener', 'service') for f in findings) else 0
 
 
 def approve_finding(c, finding_id, reason):
@@ -478,7 +501,7 @@ def approve_finding(c, finding_id, reason):
         if (row['timestamp'] != state.get('report_timestamp')
                 or state['snapshot']['fingerprint'] != c['_fingerprint']):
             raise ValueError('Approve findings from the latest scan for this configuration.')
-        if 'tiers' in c and item.get('delivery_class') == 'hard_page':
+        if item.get('delivery_class') == 'hard_page' and ('tiers' in c or item['category'] in triage.PUBLIC_EXPOSURES):
             raise ValueError('A hard-threat finding always pages and cannot be approved.')
         item = safe_finding(item)
         if item['category'] in ('coverage', *notify.PAGE_NOTES) or not notify.notification_items([item]):
@@ -612,7 +635,8 @@ def status_command(args):
         print('Could not read or validate the Coldguardian configuration.', file=sys.stderr)
     else:
         code, status = 0, 'ok'
-        if args.json:
+        sources = [key for key in exposure.STATUS if c.get(key)]
+        if args.json or sources or c.get('host_watch'):
             try:
                 state = load_json(Path(c['output_dir']) / 'state.json')
             except (OSError, ValueError, RecursionError):
@@ -620,7 +644,30 @@ def status_command(args):
             if state is not None or any(k in c for k in ('tiers', 'dns_api', 'feed')):
                 stamps = scan_timestamps(c, state) if isinstance(state, dict) else {}
                 details['freshness'] = freshness(c, stamps)
-        else:
+            if c.get('host_watch'):
+                snapshot = state.get('snapshot') if isinstance(state, dict) else None
+                observed = (isinstance(snapshot, dict) and snapshot.get('fingerprint') == c['_fingerprint']
+                            and snapshot.get('host_watch') == 'ok')
+                details['host_watch'] = {'scope': hostwatch.SCOPE, 'status': 'ok' if observed else 'incomplete'}
+                if not observed:
+                    code, status = 2, 'incomplete'
+                if not args.json:
+                    print(f"Host watch ({hostwatch.SCOPE}): {details['host_watch']['status']}.")
+            if sources:
+                saved = state.get('exposure') if isinstance(state, dict) else None
+                coverage = {}
+                for key in sources:
+                    entry = saved.get(key) if isinstance(saved, dict) else None
+                    result = entry.get('status') if isinstance(entry, dict) and entry.get('config') == c[key] else None
+                    if result not in ('clear', 'exposed'):
+                        result = 'incomplete'
+                        code, status = 2, 'incomplete'
+                    coverage[key] = {'status': result, 'message': exposure.STATUS[key][result]}
+                details['exposure'] = coverage
+                if not args.json:
+                    for entry in coverage.values():
+                        print(entry['message'])
+        if not args.json:
             print('Coldguardian configuration is valid.')
     if args.json:
         print(json.dumps(dict(command='status', status=status, exit_code=code, **details)))

@@ -46,7 +46,15 @@
           "approved_hosts": {"type": "integer", "minimum": 0},
           "network_complete": {"type": "boolean"},
           "log_coverage_complete": {"type": "boolean"},
-          "change": {"enum": ["added", "removed"]},
+          "change": {"enum": ["added", "removed", "changed"]},
+          "scope": {"const": "this machine only"},
+          "address": {"type": "string"},
+          "protocol": {"enum": ["tcp", "udp", "TCP", "UDP"]},
+          "process": {"type": "string"},
+          "pid": {"type": "integer", "minimum": 1},
+          "binary": {"type": "string"},
+          "path": {"type": "string"},
+          "sha256": {"type": "string"},
           "window_seconds": {"type": "integer", "minimum": 1}
         }
       }

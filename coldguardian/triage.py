@@ -7,7 +7,8 @@ from . import model
 
 RISK_PORTS = frozenset({21, 23, 139, 445, 2375, 3389, 5900, 6379, 9200, 11434, 27017})
 HOUSEHOLD_PORTS = frozenset({80, 443, 5357, 8008, 8009, 62078})
-HARD_CATEGORIES = {'risky_service', 'dns_feed_match', 'dns_suffix', 'link_feed_hit', 'login_burst'}
+PUBLIC_EXPOSURES = {'upnp_mapping', 'tailscale_funnel'}
+HARD_CATEGORIES = PUBLIC_EXPOSURES | {'risky_service', 'dns_feed_match', 'dns_suffix', 'link_feed_hit', 'login_burst'}
 
 
 def server_addresses(tiers, hosts):
@@ -20,6 +21,9 @@ def server_addresses(tiers, hosts):
 
 def classify(c, findings, snapshot, macs, approved, *, complete):
     if 'tiers' not in c:
+        for item in findings:
+            if item['category'] in PUBLIC_EXPOSURES:
+                item['delivery_class'] = 'hard_page'
         return
     servers = c['_servers']
     new = {f['ip'] for f in findings if f['category'] == 'new_device'}
@@ -35,7 +39,7 @@ def classify(c, findings, snapshot, macs, approved, *, complete):
         category = item['category']
         ip = item.get('ip')
         if (category in HARD_CATEGORIES
-                or category in {'new_ports', 'baseline_drift'} and ip in servers
+                or category in {'new_ports', 'baseline_drift', 'persistence_drift'} and ip in servers
                 or category in {'new_device', 'new_ports'} and ip in risky_new):
             if category == 'new_device' and (risky_ports := RISK_PORTS.intersection(snapshot.get(ip, ()))):
                 item['ports'] = sorted(risky_ports)

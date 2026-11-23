@@ -5,6 +5,10 @@
   "required": ["command", "status", "exit_code"],
   "additionalProperties": false,
   "properties": {
+    "host_watch": {
+      "type": "object", "additionalProperties": false, "required": ["scope", "status"],
+      "properties": {"scope": {"const": "this machine only"}, "status": {"enum": ["ok", "incomplete"]}}
+    },
     "freshness": {
       "type": "object", "required": ["quick", "deep", "feeds"],
       "additionalProperties": {
@@ -33,6 +37,7 @@
       "properties": {"command": {"enum": ["uninstall", "feeds update", "status"]}},
       "oneOf": [
         {"properties": {"status": {"const": "ok"}, "exit_code": {"const": 0}}},
+        {"properties": {"command": {"const": "status"}, "status": {"const": "incomplete"}, "exit_code": {"const": 2}}},
         {"properties": {"command": {"const": "uninstall"}, "status": {"const": "canceled"}, "exit_code": {"const": 2}}},
         {"properties": {"status": {"const": "failed"}, "exit_code": {"const": 2}}}
       ]

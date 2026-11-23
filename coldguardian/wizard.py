@@ -274,7 +274,7 @@ def setup(run, *, json_output=False):
 
     if run(settings, profile='quick', confirm_baseline=confirm) != 0:
         return 2, 'incomplete'
-    if 'deep' in flags and run(settings, profile='deep', scan_command=True) == 2:
+    if 'deep' in flags and run(settings, profile='deep', setup_inventory=True) == 2:
         print('Deep inventory incomplete. Review the report and rerun coldguardian setup.')
         return 2, 'incomplete'
     if 'timer' in flags:

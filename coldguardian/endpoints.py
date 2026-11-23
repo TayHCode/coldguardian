@@ -1,6 +1,8 @@
 import re
 from urllib.parse import urlsplit
 
+from .scope import private_address, usable_address
+
 
 def valid_topic(topic):
     return isinstance(topic, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', topic) is not None
@@ -23,3 +25,18 @@ def validate_ntfy(target):
     except ValueError:
         raise ValueError('ntfy server must be an HTTP(S) URL without credentials, a query, or a fragment') from None
     return dict(target, server=server.rstrip('/'))
+
+
+def upnp_endpoint(settings, lan):
+    if not isinstance(settings, dict) or set(settings) - {'control_url', 'service'}:
+        raise ValueError('upnp requires a router control_url')
+    url = settings.get('control_url')
+    if not isinstance(url, str) or not re.fullmatch(r'http://[0-9.]+(?::[0-9]+)?/[A-Za-z0-9._~/%-]+', url):
+        raise ValueError('upnp control_url must be a LAN IPv4 HTTP URL with a control path')
+    parts = urlsplit(url)
+    if parts.port == 0 or not usable_address(private_address(parts.hostname, 'upnp'), lan):
+        raise ValueError('upnp router must be in lan_cidr')
+    service = settings.get('service', 'WANIPConnection:1')
+    if service not in ('WANIPConnection:1', 'WANIPConnection:2', 'WANPPPConnection:1'):
+        raise ValueError('invalid UPnP WAN connection service')
+    return parts, 'urn:schemas-upnp-org:service:' + service

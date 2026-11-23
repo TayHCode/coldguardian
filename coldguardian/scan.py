@@ -7,7 +7,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 from . import dnswatch, rules, triage
-from .endpoints import validate_ntfy
+from .endpoints import upnp_endpoint, validate_ntfy
 from .levels import DEFAULT_LEVEL, validate_level
 from .model import endpoint
 from .scope import (
@@ -70,6 +70,12 @@ def config(raw):
         raise ValueError('hosts must map valid host names to exact private IP addresses')
     inventory = {name: str(private_address(address, 'hosts')) for name, address in inventory.items()}
     c['hosts'] = inventory
+    if 'upnp' in c:
+        c['_upnp_endpoint'] = upnp_endpoint(c['upnp'], lan)
+    if type(c.get('tailscale_funnel', False)) is not bool:
+        raise ValueError('tailscale_funnel must be true or false')
+    if type(c.get('host_watch', False)) is not bool or (c.get('host_watch') and not c.get('local_host')):
+        raise ValueError('host_watch must be boolean and requires local_host when enabled')
     if 'dns_api' in c:
         dnswatch.validate(c['dns_api'], inventory)
     if 'tiers' in c:
@@ -124,7 +130,7 @@ def config(raw):
     if c.get('ntfy') is not None:
         c['ntfy'] = validate_ntfy(c['ntfy'])
     public = {k: v for k, v in c.items() if not k.startswith('_') and k not in
-              ('feed', 'tiers', 'dns_api', 'level', 'model_url', 'ntfy', 'report_max_age_days', 'report_max_count')}
+              ('host_watch', 'feed', 'tiers', 'dns_api', 'upnp', 'tailscale_funnel', 'level', 'model_url', 'ntfy', 'report_max_age_days', 'report_max_count')}
     public.setdefault('model', 'dolphin3:8b')
     c['_fingerprint'] = hashlib.sha256(json.dumps(public, sort_keys=True).encode()).hexdigest()
     return c
@@ -168,7 +174,8 @@ def parse_nmap(xml, allowed, port_count=None, permitted_ports=None):
     return snapshot
 
 
-READ_COMMANDS = {('ip', '-j', 'addr'), ('ip', '-j', 'route'), ('tailscale', 'status', '--json')}
+READ_COMMANDS = {('ss', '-H', '-tulpn'), ('ip', '-j', 'addr'), ('ip', '-j', 'route'), ('tailscale', 'status', '--json'),
+                 ('tailscale', 'funnel', 'status', '--json')}
 
 
 def command(args, timeout, input=None):

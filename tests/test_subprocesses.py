@@ -10,8 +10,9 @@ from unittest.mock import patch
 from coldguardian import scan, timers
 
 
-ALLOWLIST = {'nmap', 'ip', 'tailscale'}
-READ_ONLY = {('ip', '-j', 'addr'), ('ip', '-j', 'route'), ('tailscale', 'status', '--json')}
+ALLOWLIST = {'nmap', 'ip', 'tailscale', 'ss'}
+READ_ONLY = {('ss', '-H', '-tulpn'), ('ip', '-j', 'addr'), ('ip', '-j', 'route'), ('tailscale', 'status', '--json'),
+                 ('tailscale', 'funnel', 'status', '--json')}
 LIFECYCLE_CALLERS = {'check_user_manager': 'setup', 'install_scan_timers': 'setup', 'remove_scan_timers': 'uninstall'}
 USER_SYSTEMCTL = {
     'check_user_manager': [('show', '--property=Version')],
@@ -128,7 +129,8 @@ class SubprocessTests(unittest.TestCase):
 
     def test_command_rejects_other_executables_before_launch(self):
         with patch('coldguardian.scan.subprocess.run') as launch:
-            for args in (['ssh'], ['sh'], ['/bin/nmap'], ['ip', 'link', 'set'], ['tailscale', 'down']):
+            for args in (['ss'], ['ss', '-K'], ['ss', '-H', '-tulpn', '-a'], ['ssh'], ['sh'], ['/bin/nmap'], ['ip', 'link', 'set'], ['tailscale', 'down'],
+                         ['tailscale', 'funnel', '443'], ['tailscale', 'funnel', 'reset']):
                 with self.subTest(args=args), self.assertRaises(ValueError):
                     scan.command(args, 1)
             launch.assert_not_called()

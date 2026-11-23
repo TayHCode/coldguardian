@@ -7,12 +7,13 @@ import resource
 import stat
 import tempfile
 
+from . import exposure, hostwatch
 from .scan import AUTH_METHOD, HOST_NAME, PRODUCT, SERVICE, finding, valid_ip
 from .rules import RULE_ID
 
 
 DNS_TELEMETRY = {'dns_long_label', 'dns_entropy', 'dns_first_seen_burst'}
-REPORT_OBSERVATIONS = {'observed_host', 'scan_summary', 'source_summary', 'service'}
+REPORT_OBSERVATIONS = {'observed_host', 'scan_summary', 'source_summary', 'host_listener', 'service'}
 ARCHIVE_STAMP = '%Y%m%dT%H%M%S.%fZ'
 DEFAULT_REPORT_COUNT = 50
 
@@ -141,6 +142,8 @@ def scan_document(findings, profile, level, record=None):
 
 
 COVERAGE_MESSAGES = {
+    **hostwatch.GAPS,
+    **{k: v['incomplete'] for k, v in exposure.STATUS.items()},
     'lan_discovery': 'Local network discovery failed. Next step: check scanner access and retry.',
     'host_discovery': 'Inventory discovery failed. Next step: check network connectivity to the inventory hosts and retry.',
     'host_offline': 'An inventory device did not respond. Next step: check whether it is powered on and connected.',
@@ -207,7 +210,7 @@ def private_file(path):
 
 def safe_finding(f):
     categories = {'new_device', 'new_ports', 'observed_host', 'auth_failed', 'dns_suffix', 'dns_long_label', 'dns_entropy', 'coverage', 'baseline_missing', 'baseline_mismatch', 'baseline_scope_review', 'baseline_approved', 'baseline_enrolled', 'scan_summary', 'source_summary',
-                  'service', 'dns_feed_match', 'link_feed_hit', 'login_burst', 'risky_service', 'peer_change', 'baseline_drift'}
+                  'service', 'dns_feed_match', 'link_feed_hit', 'login_burst', 'risky_service', 'peer_change', 'baseline_drift', 'host_listener', 'persistence_drift', 'upnp_mapping', 'tailscale_funnel'}
     category = f.get('category')
     result = {'category': category if isinstance(category, str) and category in categories | DNS_TELEMETRY else 'other'}
     for key in ('ip', 'client_ip'):
@@ -228,6 +231,39 @@ def safe_finding(f):
         result['ports'] = [p for p in f['ports'] if type(p) is int and 1 <= p <= 65535]
     if type(f.get('port')) is int and 1 <= f['port'] <= 65535:
         result['port'] = f['port']
+    if category == 'source_summary' and result.get('component') in exposure.STATUS:
+        messages = exposure.STATUS[result['component']]
+        status = f.get('exposure_status')
+        if isinstance(status, str) and status in messages:
+            result.update(exposure_status=status, message=messages[status])
+    if f.get('scope') == hostwatch.SCOPE:
+        result['scope'] = hostwatch.SCOPE
+    if category == 'host_listener':
+        for key in ('address', 'process', 'binary'):
+            if isinstance(f.get(key), str):
+                result[key] = f[key]
+        if type(f.get('pid')) is int and f['pid'] > 0:
+            result['pid'] = f['pid']
+        if f.get('protocol') in ('tcp', 'udp'):
+            result['protocol'] = f['protocol']
+    if category == 'persistence_drift':
+        if isinstance(f.get('path'), str) and f['path'].startswith('/'):
+            result['path'] = f['path']
+        if isinstance(f.get('sha256'), str) and re.fullmatch('[0-9a-f]{64}', f['sha256']):
+            result['sha256'] = f['sha256']
+        if f.get('change') in ('added', 'changed'):
+            result['change'] = f['change']
+    if category == 'tailscale_funnel':
+        node = f.get('node')
+        if isinstance(node, str) and len(node) <= 253 and exposure.NODE.fullmatch(node):
+            result['node'] = node
+    if category == 'upnp_mapping':
+        if f.get('protocol') in ('TCP', 'UDP'):
+            result['protocol'] = f['protocol']
+        if type(f.get('internal_port')) is int and 1 <= f['internal_port'] <= 65535:
+            result['internal_port'] = f['internal_port']
+        if isinstance(f.get('remote_ip'), str) and valid_ip(f['remote_ip']):
+            result['remote_ip'] = valid_ip(f['remote_ip'])
     if category == 'peer_change' and f.get('change') in ('added', 'removed'):
         result['change'] = f['change']
     if category == 'risky_service' and isinstance(f.get('rule'), str) and RULE_ID.fullmatch(f['rule']):
@@ -265,7 +301,8 @@ MODEL_OBSERVATION_VALUES = {
 
 def model_observation(finding):
     result = safe_finding(finding)
-    result.pop('product', None)
+    for key in ('product', 'address', 'binary', 'process', 'path', 'sha256'):
+        result.pop(key, None)
     for field, allowed in MODEL_OBSERVATION_VALUES.items():
         value = finding.get(field)
         if isinstance(value, str) and value in allowed:
@@ -315,7 +352,7 @@ def with_explanation(line, key, result):
 def report_text(findings, explanations, stamp, *, scanner_peak_rss_kib=None):
     safe = [safe_finding(f) for f in findings]
     security, coverage, observations, services = [], [], [], []
-    attention = any(f['category'] not in DNS_TELEMETRY | {'scan_summary', 'source_summary', 'baseline_approved', 'baseline_enrolled', 'service'} for f in safe)
+    attention = any(f['category'] not in DNS_TELEMETRY | {'scan_summary', 'source_summary', 'baseline_approved', 'baseline_enrolled', 'host_listener', 'service'} for f in safe)
     for index, (raw, f) in enumerate(zip(findings, safe)):
         category = f['category']
         section = security
@@ -363,11 +400,25 @@ def report_text(findings, explanations, stamp, *, scanner_peak_rss_kib=None):
         elif category == 'scan_summary':
             section = coverage
             line = 'Scan observed ' + str(f.get('host_count', 0)) + ' hosts. Network scan ' + ('complete' if f.get('network_complete') else 'incomplete') + '; log coverage ' + ('complete' if f.get('log_coverage_complete') else 'incomplete') + ' across ' + str(f.get('log_sources', 0)) + ' sources.'
+        elif category == 'host_listener':
+            section = services
+            endpoint = f"{f.get('protocol')} {f.get('address')}:{f.get('port')}"
+            owner = f"{f.get('process', 'unknown process')} (PID {f.get('pid', 'unknown')}), {f.get('binary', 'binary unavailable')}"
+            line = literal_markdown(ascii(f'{endpoint} {owner}'))
+        elif category == 'persistence_drift':
+            path = ascii(f.get('path', 'unknown'))
+            line = f"Persistence file {f.get('change', 'changed')} on this machine: {literal_markdown(path)}."
+        elif category == 'source_summary' and f.get('scope') == hostwatch.SCOPE:
+            section, line = coverage, f"Host watch ({hostwatch.SCOPE}): {f.get('status')}."
         elif category == 'service':
             section = services
             line = address + ':' + str(f.get('port', '?')) + ' ' + f.get('service', 'unknown') + ((' (' + f['product'] + ')') if 'product' in f else '') + ((', SSH sign-in methods: ' + ', '.join(f['auth_methods'])) if 'auth_methods' in f else '')
+        elif category in ('upnp_mapping', 'tailscale_funnel'):
+            line = exposure.description(f)
         elif category == 'source_summary':
-            continue
+            if 'message' not in f or f.get('exposure_status') == 'incomplete':
+                continue
+            section, line = coverage, f['message']
         else:
             line = 'An additional finding needs review. Next step: review the local monitoring checks.'
         if raw.get('triage_label') in ('real_threat', 'review_later', 'likely_household'):

@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.request
 
+from . import exposure, hostwatch
 from .levels import DEFAULT_LEVEL, LEVELS
 from .endpoints import valid_topic
 from .report import qualified_finding_id, safe_finding
@@ -111,8 +112,9 @@ FINDING_LABELS = {
     'peer_change': 'Peer change',
     'baseline_drift': 'Baseline drift',
 }
-ROUTINE_CATEGORIES = {'baseline_approved', 'baseline_enrolled', 'observed_host', 'scan_summary', 'source_summary'}
+ROUTINE_CATEGORIES = {'baseline_approved', 'baseline_enrolled', 'host_listener', 'observed_host', 'scan_summary', 'source_summary'}
 COVERAGE_EVENTS = {
+    *exposure.STATUS, *hostwatch.GAPS,
     'lan_discovery', 'host_discovery', 'host_offline', 'tcp_scan', 'tailscale_status', 'wireguard_discovery',
     'log_read', 'log_backlog', 'dns_parse', 'state_read',
     'baseline_read', 'baseline_approval', 'configuration_or_io', 'overlapping_run',
@@ -161,6 +163,14 @@ def notification_items(findings, approvals=(), *, stamp=None, group_by_origin=Fa
             ports = ', '.join(map(str, item.get('ports', [])))
             key = 'baseline_drift:' + ip + ':' + hashlib.sha256(ports.encode()).hexdigest()
             text = 'Previously approved ports no longer observed open on ' + ip + ': ' + ports
+        elif category == 'persistence_drift':
+            identity = json.dumps([ip, item.get('path'), item.get('sha256')])
+            key = category + ':' + hashlib.sha256(identity.encode()).hexdigest()
+            text = 'Persistence file ' + item.get('change', 'changed') + where + '. Review the local report.'
+            event = 'baseline_drift'
+        elif category in ('upnp_mapping', 'tailscale_funnel'):
+            text = exposure.description(item)
+            key = category + ':' + hashlib.sha256(text.encode()).hexdigest()
         elif category in PAGE_NOTES:
             key, text = category, PAGE_NOTES[category]
         elif category in FINDING_LABELS:
@@ -218,6 +228,16 @@ def deliver_notification(state, findings, save_pending, now=None, *, level=DEFAU
     paged = saved_map(saved.get('paged'), lambda t: type(t) is int and 0 <= now - t < PAGED_TTL)
     allowed = LEVELS[level].page_events | {'hard_page'}
     items = notification_items(findings, approvals, stamp=stamp, group_by_origin=heartbeat is not None)
+    for summary in findings:
+        if summary['category'] == 'source_summary' and summary.get('exposure_status') in ('clear', 'exposed'):
+            category = {'upnp': 'upnp_mapping', 'tailscale_funnel': 'tailscale_funnel'}[summary['component']]
+        elif (summary['category'] == 'source_summary' and summary.get('scope') == hostwatch.SCOPE
+              and not any(f.get('component') in ('host_persistence', 'host_baseline') for f in findings)):
+            category = 'persistence_drift'
+        else:
+            continue
+        prefix = f'hard:{category}:'
+        paged = {key: sent_at for key, sent_at in paged.items() if not key.startswith(prefix) or key in items}
     exact_approvals = [item for item in approvals if 'count' not in item]
     muted_keys = notification_items(exact_approvals).keys() - items.keys()
     pending = {}

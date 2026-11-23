@@ -96,8 +96,9 @@ For unattended checks after setup, use `coldguardian status --json`.
 The argument parser reports usage errors on stderr.
 
 `coldguardian status --json` validates the local configuration without starting
-a scan. It exits 0 for valid configuration and 2 if the file is missing,
-unreadable, or invalid. After a scan, or when tiers, remote DNS or a feed are
+a scan. It exits 0 for valid configuration with complete coverage of any enabled
+public exposure checks. It exits 2 for incomplete exposure coverage or a missing,
+unreadable, or invalid configuration. After a scan, or when tiers, remote DNS or a feed are
 configured, `freshness` gives the last successful quick scan, deep scan and
 feed refresh as Unix timestamps. Each entry is `fresh`, `stale`, `missing` or
 `unscheduled`. A coverage failure leaves the last successful time in place.
@@ -108,7 +109,7 @@ Pass `--config` to check a separate configuration file.
 |---|---|---|
 | `ok` | 0 | The command completed. |
 | `declined` | 0 | Setup ended before writing configuration because scope approval was declined. |
-| `incomplete` | 2 | Setup could not finish the baseline or the requested deep inventory. |
+| `incomplete` | 2 | Setup could not finish the inventory, or an enabled exposure check lacks a complete result. |
 | `canceled` | 2 | Setup or uninstall was interrupted, or setup input ended. |
 | `failed` | 2 | The command encountered an error. |
 
@@ -389,3 +390,24 @@ python3 -m unittest discover -s tests -v
 Coldguardian is licensed under the MIT License. It started from the public
 [homelab-netguard source archive at commit `051d76e`](https://api.github.com/repositories/1431360051/zipball/051d76e68c84a947754d46eb4be0652c6b2167b4).
 See [LICENSE](LICENSE) for the original copyright and terms.
+
+### Optional Linux host watch
+
+Set `"host_watch": true` and set `local_host` to the scanner's inventory name. Quick and deep scans then report on **this machine only**. Host watch is off by default.
+
+The report lists local TCP listeners and bound UDP sockets with their address, port, process name, PID and binary path when visible. It uses `ss -H -tulpn` and reads the executable link in `/proc`. Missing process information, an unreadable source or unavailable `ss` produces incomplete coverage in the scan and in `coldguardian status --json`.
+
+Persistence checks cover `/root/.ssh/authorized_keys` and `/home/*/.ssh/authorized_keys`, system crontabs, periodic cron directories and user crontabs in `/var/spool/cron` or its `crontabs` directory. The watch checks systemd service and timer files, wants and requires links and unit-specific drop-ins under system and user unit directories in `/etc/systemd`, `/usr/lib/systemd` and `/lib/systemd`, local system units under `/usr/local/lib/systemd/system`, and user units under the watched homes’ `.config/systemd/user`. Custom SSH key locations, other home layouts and transient systemd units are outside this slice.
+
+After enabling host watch, run a scan and review the listeners in the report and the paths and hashes in the latest `state.json` snapshot. Use `coldguardian --approve-baseline` to approve the current network and persistence snapshot together. The persistence reference stores paths and SHA-256 hashes. The default unprivileged service usually cannot read root's files, other users' private files, or the process owners of other users' listening sockets. Approval enrolls the files the service can read and retains prior hashes for files it could not check during a partial scan. Host-watch status stays incomplete while a gap exists. Readable changes still produce findings, and completed network scans still advance freshness and qualify for timer setup. A new or changed file on a tagged server pages at every notification level. The model has no role in that decision.
+
+Later slices cover remote collection and agents on other hosts, outbound connection snapshots, decoy canaries, auth-burst changes and a dedicated host-watch daemon or service.
+
+### Optional public exposure checks
+
+Both checks run during quick and deep scans. Enable either in your JSON configuration.
+
+- Set `"tailscale_funnel": true` to read `tailscale funnel status --json` on the scanner. A clean result means **No Funnel on this node**. Each scan covers only the node it ran on. Private Serve listeners do not produce public-exposure findings.
+- Set `"upnp": {"control_url": "http://ROUTER-IP:PORT/CONTROL-PATH", "service": "WANIPConnection:1"}` with the router's actual LAN IPv4 address, port and IGD control path. Use the service advertised for that endpoint. Supported services are `WANIPConnection:1` (default), `WANIPConnection:2`, and `WANPPPConnection:1`. Coldguardian reads the mapping table with `GetGenericPortMappingEntry`. The report identifies the internal destination of an enabled forward and any remote-source restriction. An empty table does not rule out manual port forwards or IPv6 pinholes. It does not test reachability from the internet.
+
+New public exposures page at every notification level, including when tiers are disabled. Read the results of the last scan with `coldguardian status --json`. An unreadable source or an unfinished enumeration reports incomplete coverage. A confirmed exposure found before the error still pages.
