@@ -6,7 +6,7 @@ import re
 import subprocess
 import xml.etree.ElementTree as ET
 
-from . import rules
+from . import dnswatch, rules, triage
 from .endpoints import validate_ntfy
 from .levels import DEFAULT_LEVEL, validate_level
 from .model import endpoint
@@ -70,6 +70,10 @@ def config(raw):
         raise ValueError('hosts must map valid host names to exact private IP addresses')
     inventory = {name: str(private_address(address, 'hosts')) for name, address in inventory.items()}
     c['hosts'] = inventory
+    if 'dns_api' in c:
+        dnswatch.validate(c['dns_api'], inventory)
+    if 'tiers' in c:
+        c['_servers'] = triage.server_addresses(c['tiers'], inventory)
     if len(set(inventory.values())) != len(inventory):
         raise ValueError('host addresses must be unique')
     if lan.prefixlen == 32 and str(lan.network_address) not in inventory.values():
@@ -120,7 +124,7 @@ def config(raw):
     if c.get('ntfy') is not None:
         c['ntfy'] = validate_ntfy(c['ntfy'])
     public = {k: v for k, v in c.items() if not k.startswith('_') and k not in
-              ('feed', 'level', 'model_url', 'ntfy', 'report_max_age_days', 'report_max_count')}
+              ('feed', 'tiers', 'dns_api', 'level', 'model_url', 'ntfy', 'report_max_age_days', 'report_max_count')}
     public.setdefault('model', 'dolphin3:8b')
     c['_fingerprint'] = hashlib.sha256(json.dumps(public, sort_keys=True).encode()).hexdigest()
     return c

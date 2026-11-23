@@ -167,7 +167,8 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(markdown.startswith('# Attention needed\n'))
         self.assertIn('New open TCP ports', markdown)
         self.assertEqual(len(requests), 1)
-        page.assert_called_once_with([f'New open ports on {SCAN_HOST}: 23'], delayed=False)
+        page.assert_called_once_with([f'New open ports on {SCAN_HOST}: 23'], delayed=False,
+                                     finding_id=f"{row['timestamp']}:E2")
 
     def test_explain_returns_approved_history_to_the_model_and_keeps_the_page(self):
         history = call('baseline_history', {'host': SCAN_HOST})
@@ -268,5 +269,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(row['model_explanations'], {})
         self.assertEqual(markdown.splitlines()[4:], without_text.splitlines()[4:])
         self.assertNotIn('model unavailable', without_text)
-        self.assertEqual(page.call_args_list, without_page.call_args_list)
-        page.assert_called_once()
+        lines = ['DNS queries matched the local feed', f'New open ports on {SCAN_HOST}: 23']
+        page.assert_called_once_with(lines, delayed=False, finding_id=f"{row['timestamp']}:E3")
+        without_page.assert_called_once_with(lines, delayed=False,
+                                             finding_id=f"{without_model['timestamp']}:E3")

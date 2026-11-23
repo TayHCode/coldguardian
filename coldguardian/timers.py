@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 from .levels import LEVELS
-from .report import atomic_text
+from .report import atomic_text, load_json
 
 
 PROFILES = ('quick', 'deep')
@@ -17,7 +17,8 @@ def _unit_directory():
 
 
 def _systemctl(*args):
-    subprocess.run(['systemctl', '--user', *args], check=True, timeout=30, stdout=subprocess.DEVNULL)
+    timeout = None if args[0] == 'start' else 30
+    subprocess.run(['systemctl', '--user', *args], check=True, timeout=timeout, stdout=subprocess.DEVNULL)
 
 
 def check_user_manager():
@@ -45,7 +46,14 @@ def write_scan_timers(directory: Path, level: str, *, enabled: bool = False) -> 
     return tuple(paths)
 
 
-def install_scan_timers(level):
+def _completed_scan_timestamp(state_path):
+    state = load_json(state_path, {})
+    snapshot = state.get('snapshot') if isinstance(state, dict) else None
+    if isinstance(snapshot, dict) and snapshot.get('complete') is True:
+        return state.get('report_timestamp')
+
+
+def install_scan_timers(level, output_dir):
     directory = _unit_directory()
     directory.mkdir(parents=True, exist_ok=True)
     template = files('coldguardian').joinpath('coldguardian.service').read_text()
@@ -55,6 +63,19 @@ def install_scan_timers(level):
         profile = timer.stem.removeprefix('coldguardian-')
         atomic_text(timer.with_suffix('.service'), template.format(python=python, profile=profile))
     _systemctl('daemon-reload')
+    state_path = Path(output_dir) / 'state.json'
+    previous = _completed_scan_timestamp(state_path)
+    for timer in timers:
+        service = timer.with_suffix('.service').name
+        print(f'Checking {service}...', flush=True)
+        try:
+            _systemctl('start', service)
+        except subprocess.CalledProcessError as error:
+            raise ValueError(f'{service} failed to start or finish. Inspect journalctl --user -u {service}.') from error
+        completed = _completed_scan_timestamp(state_path)
+        if not completed or completed == previous:
+            raise ValueError(f'{service} did not record a new complete network scan. Inspect journalctl --user -u {service}.')
+        previous = completed
     _systemctl('enable', '--now', *(timer.name for timer in timers))
     print('Enabled ' + ', '.join(timer.name for timer in timers))
 

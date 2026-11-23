@@ -19,6 +19,9 @@
         "required": ["category", "check", "evidence_id"],
         "additionalProperties": false,
         "properties": {
+          "delivery_class": {"enum": ["hard_page", "digest"]},
+          "triage_label": {"enum": ["real_threat", "review_later", "likely_household"]},
+          "triage_reason": {"type": "string"},
           "category": {"type": "string", "minLength": 1},
           "check": {"type": "string", "minLength": 1},
           "finding_id": {"type": "string", "minLength": 1},

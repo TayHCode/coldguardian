@@ -3,8 +3,7 @@ Description=Local homelab network defense report (alert only)
 
 [Service]
 Type=oneshot
-ExecStart={python} -m coldguardian.cli --{profile} --config "%h/.config/coldguardian/config.json"
-SuccessExitStatus=1
+ExecStart={python} -m coldguardian.scheduled --{profile} --config "%h/.config/coldguardian/config.json"
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

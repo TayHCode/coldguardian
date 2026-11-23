@@ -33,7 +33,7 @@ Each promise has a check. If the check fails, the promise is broken.
 | 3 | **Light.** Standard library Python plus Nmap. No Docker. | `pyproject.toml` has zero runtime dependencies. Each report records the scanner's peak RSS. Target: under 150 MB, not counting Nmap or the model (target, not yet measured). |
 | 4 | **Quick scan is quick.** | On a /24 with up to 30 known hosts, a quick scan finishes in 60 seconds or less (target, measured in the v1 lab test). |
 | 5 | **Deep scan covers everything it was told to, and says what it missed.** LAN, Tailscale peers, WireGuard subnets, all TCP ports, service names. | Lab network with a planted service on an odd port and a peer-only host. Deep scan finds both. An unreachable host shows up as a coverage finding, not silence. Builds on netguard's coverage checks (netguard-audit.md:20–27). |
-| 6 | **Code decides alerts. The model only explains.** The model cannot create, drop or downgrade an alert. | Test with a stub model that labels a real risk "benign". The alert still goes out, with the model's label shown next to the code's verdict (local-models.md:12, 36, 50). |
+| 6 | **Code decides alerts.** Hard threats always page under the opt-in tier rules. Only borderline household events are eligible for local-model routing to the digest. Without tiers the model only explains. | Test with a stub model that labels a real risk "benign". The alert still goes out, with the model's label shown next to the code's verdict (local-models.md:12, 36, 50). |
 | 7 | **Every alert shows its evidence.** | Every finding in the report names the check that fired and its evidence IDs. Every model explanation cites evidence IDs that exist (local-models.md:38). |
 | 8 | **Link checks stay on the box.** `coldguardian check-link <url>` answers from a local feed cache. | Run the check with outbound network blocked. It still answers. Unit test asserts no socket opens during a lookup (landscape.md:10, 57). |
 | 9 | **The model stays local, and there is no silent fallback.** | Config accepts one model URL. If it is down, the report says "model unavailable" and every finding is still reported. No other endpoint is ever called (local-models.md:53). |
@@ -69,7 +69,7 @@ Each promise has a check. If the check fails, the promise is broken.
 
 Both write one report, both list what they could not reach, and both feed the same baseline. Netguard today has one path and checks port state only, without service names (netguard-audit.md:46). Quick vs deep follows the audit's proposal (netguard-audit.md:63).
 
-Coldguardian reads AdGuard and Pi-hole query logs only from local files on the scanner box.
+Coldguardian reads local AdGuard and Pi-hole query logs. An explicitly configured DNS API source enables read-only HTTPS queries to one inventory host.
 
 ## 7. The three levels
 

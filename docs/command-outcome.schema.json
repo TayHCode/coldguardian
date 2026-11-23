@@ -5,15 +5,37 @@
   "required": ["command", "status", "exit_code"],
   "additionalProperties": false,
   "properties": {
+    "freshness": {
+      "type": "object", "required": ["quick", "deep", "feeds"],
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false, "required": ["last_success", "status"],
+        "properties": {
+          "last_success": {"type": ["integer", "null"]},
+          "status": {"enum": ["fresh", "stale", "missing", "unscheduled"]}
+        }
+      }
+    },
+    "schema_version": {"type": "integer", "const": 1},
     "command": {"enum": ["setup", "uninstall", "feeds update", "status"]},
     "status": {"enum": ["ok", "declined", "incomplete", "canceled", "failed"]},
     "exit_code": {"type": "integer", "enum": [0, 2]}
   },
   "oneOf": [
-    {"properties": {"status": {"const": "ok"}, "exit_code": {"const": 0}}},
-    {"properties": {"command": {"const": "setup"}, "status": {"const": "declined"}, "exit_code": {"const": 0}}},
-    {"properties": {"command": {"const": "setup"}, "status": {"const": "incomplete"}, "exit_code": {"const": 2}}},
-    {"properties": {"command": {"enum": ["setup", "uninstall"]}, "status": {"const": "canceled"}, "exit_code": {"const": 2}}},
-    {"properties": {"status": {"const": "failed"}, "exit_code": {"const": 2}}}
+    {
+      "properties": {"command": {"const": "setup"}},
+      "required": ["schema_version"],
+      "oneOf": [
+        {"properties": {"status": {"enum": ["ok", "declined"]}, "exit_code": {"const": 0}}},
+        {"properties": {"status": {"enum": ["incomplete", "canceled", "failed"]}, "exit_code": {"const": 2}}}
+      ]
+    },
+    {
+      "properties": {"command": {"enum": ["uninstall", "feeds update", "status"]}},
+      "oneOf": [
+        {"properties": {"status": {"const": "ok"}, "exit_code": {"const": 0}}},
+        {"properties": {"command": {"const": "uninstall"}, "status": {"const": "canceled"}, "exit_code": {"const": 2}}},
+        {"properties": {"status": {"const": "failed"}, "exit_code": {"const": 2}}}
+      ]
+    }
   ]
 }

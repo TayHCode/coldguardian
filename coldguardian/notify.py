@@ -9,7 +9,7 @@ import urllib.request
 
 from .levels import DEFAULT_LEVEL, LEVELS
 from .endpoints import valid_topic
-from .report import safe_finding
+from .report import qualified_finding_id, safe_finding
 
 
 TOPIC_ENV = 'COLDGUARDIAN_NTFY_TOPIC_FILE'
@@ -23,7 +23,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def send(lines=(), *, mode='alert', delayed=False, target=LEGACY_TARGET):
+def send(lines=(), *, mode='alert', delayed=False, target=LEGACY_TARGET, finding_id=None):
     if target is None or (target is LEGACY_TARGET and TOPIC_ENV not in os.environ):
         return {'status': 'disabled'}
     if target is LEGACY_TARGET:
@@ -38,11 +38,18 @@ def send(lines=(), *, mode='alert', delayed=False, target=LEGACY_TARGET):
             return {'status': 'failed', 'error_type': 'TopicFileError'}
     else:
         server, topic = target['server'], target['topic']
-    if mode == 'test':
+    if mode not in ('test', 'failure', 'alert', 'digest', 'heartbeat'):
+        return {'status': 'failed', 'error_type': 'NotificationModeError'}
+    blank = isinstance(target, dict) and target.get('detail') == 'blank'
+    if blank:
+        title, body = 'Coldguardian', 'Coldguardian has a new alert.'
+    elif mode == 'heartbeat':
+        title, body = 'Coldguardian weekly heartbeat', '\n'.join(lines)
+    elif mode == 'test':
         title, body = 'Coldguardian test', 'Coldguardian test notification. Alert-only monitoring.'
     elif mode == 'failure':
         title, body = 'Coldguardian monitoring incomplete', 'Coldguardian scanner failed to complete; monitoring incomplete. Review the local scanner.'
-    elif mode in ('alert', 'digest'):
+    else:
         lines = [str(line)[:MAX_LINE] for line in lines]
         shown = lines[:MAX_LINES]
         if len(lines) > MAX_LINES:
@@ -51,15 +58,16 @@ def send(lines=(), *, mode='alert', delayed=False, target=LEGACY_TARGET):
             title = 'Coldguardian: new on your network'
             if delayed:
                 shown.insert(0, 'Delayed from an earlier delivery failure.')
+            if finding_id:
+                shown.insert(0, 'Saved finding: ' + finding_id)
             shown.append('Alert only; nothing was changed.')
         else:
             title = 'Coldguardian morning digest'
             shown = shown or ['Nothing new since the last digest.']
         body = '\n'.join(shown)
-    else:
-        return {'status': 'failed', 'error_type': 'NotificationModeError'}
+    priority = '3' if not blank and mode in ('test', 'digest', 'heartbeat') else '4'
     request = urllib.request.Request(server + '/' + topic, data=body.encode('ascii', 'replace'),
-                                     headers={'Title': title, 'Priority': '3' if mode in ('test', 'digest') else '4',
+                                     headers={'Title': title, 'Priority': priority,
                                               'Content-Type': 'text/plain; charset=utf-8'}, method='POST')
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
@@ -95,6 +103,7 @@ FINDING_LABELS = {
     'auth_failed': 'Failed sign-ins',
     'dns_suffix': 'Configured DNS suffix matches',
     'dns_long_label': 'Long DNS labels',
+    'dns_first_seen_burst': 'Burst of first-seen DNS names',
     'dns_entropy': 'High-entropy DNS labels',
     'dns_feed_match': 'DNS queries matched the local feed',
     'link_feed_hit': 'Known-bad link match',
@@ -114,15 +123,16 @@ MAX_SAVED = 200
 DIGEST_HOUR = 8
 
 
-def notification_items(findings, approvals=()):
+def notification_items(findings, approvals=(), *, stamp=None, group_by_origin=False):
     safe = [(safe_finding(f), f.get('model_label') == 'needs_human') for f in findings]
     risky_hosts = {item['ip'] for item, _ in safe if item['category'] == 'risky_service' and 'ip' in item}
     items = {}
-    for item, needs_human in safe:
+    for index, (item, needs_human) in enumerate(safe):
         category = item['category']
         if category in ROUTINE_CATEGORIES:
             continue
-        if item in approvals and not (category == 'new_device' and item.get('ip') in risky_hosts):
+        route = findings[index].get('delivery_class')
+        if item in approvals and route != 'hard_page' and not (category == 'new_device' and item.get('ip') in risky_hosts):
             continue
         ip, host, client = item.get('ip', 'an unlisted address'), item.get('host', ''), item.get('client_ip', '')
         where = (' on ' + host if host else '') + (' from ' + client if client else '')
@@ -133,6 +143,9 @@ def notification_items(findings, approvals=()):
             if ip in risky_hosts:
                 event = 'risky_new_device'
                 text += ' has a risky service open'
+            elif route == 'hard_page' and item.get('ports'):
+                event = 'risky_new_device'
+                text += ' exposes risky TCP ports ' + ', '.join(map(str, item['ports']))
         elif category == 'new_ports':
             ports = ', '.join(map(str, item.get('ports', [])))
             key, text = 'new_ports:' + ip + ':' + ports, 'New open ports on ' + ip + ': ' + ports
@@ -161,8 +174,18 @@ def notification_items(findings, approvals=()):
             key, text = 'needs_human' + where, 'Finding needs your review' + where
         else:
             continue
+        if route == 'hard_page':
+            key = 'hard:' + key
         slot = items.setdefault(key, {'text': text, 'count': 0, 'page_events': set()})
+        if group_by_origin and (origin := item.get('client_ip') or item.get('ip') or item.get('host')):
+            slot['origin'] = origin
+        if stamp is not None:
+            slot.setdefault('finding_id', qualified_finding_id(stamp, index))
         slot['count'] += count
+        if route == 'hard_page':
+            slot['page_events'].update(('hard_page', category))
+        if route == 'digest':
+            continue
         if event in LEVELS['high'].page_events:
             slot['page_events'].add(event)
         if needs_human:
@@ -185,7 +208,7 @@ def is_slot(value):
 
 
 def deliver_notification(state, findings, save_pending, now=None, *, level=DEFAULT_LEVEL,
-                         target=LEGACY_TARGET, approvals=()):
+                         target=LEGACY_TARGET, approvals=(), stamp=None, heartbeat=None):
     if target is None or (target is LEGACY_TARGET and TOPIC_ENV not in os.environ):
         return {'status': 'disabled'}
     destination = {} if target is LEGACY_TARGET else {'target': target}
@@ -193,8 +216,8 @@ def deliver_notification(state, findings, save_pending, now=None, *, level=DEFAU
     saved = state.get('notification')
     saved = saved if isinstance(saved, dict) else {}
     paged = saved_map(saved.get('paged'), lambda t: type(t) is int and 0 <= now - t < PAGED_TTL)
-    allowed = LEVELS[level].page_events
-    items = notification_items(findings, approvals)
+    allowed = LEVELS[level].page_events | {'hard_page'}
+    items = notification_items(findings, approvals, stamp=stamp, group_by_origin=heartbeat is not None)
     exact_approvals = [item for item in approvals if 'count' not in item]
     muted_keys = notification_items(exact_approvals).keys() - items.keys()
     pending = {}
@@ -215,17 +238,36 @@ def deliver_notification(state, findings, save_pending, now=None, *, level=DEFAU
     pages = {key: item for key, item in items.items() if item['page_events'] & allowed}
     for key, item in pages.items():
         if key not in paged:
-            events = item['page_events'] | set(pending.get(key, {}).get('page_events', []))
+            previous = pending.get(key, {})
+            events = item['page_events'] | set(previous.get('page_events', []))
             pending[key] = {'text': item['text'][:MAX_LINE], 'page_events': sorted(events)}
+            if heartbeat is not None and item.get('origin'):
+                pending[key]['origin'] = item['origin']
+            finding_id = previous.get('finding_id') or item.get('finding_id')
+            if finding_id:
+                pending[key]['finding_id'] = finding_id
     local, day = time.localtime(now), time.strftime('%Y-%m-%d', time.localtime(now))
     digest_day = saved.get('digest_day')
     digest_due = local.tm_hour >= DIGEST_HOUR and digest_day != day
     state['notification'] = {'paged': paged, 'pending': pending, 'digest': digest, 'digest_day': digest_day}
     outcomes = []
-    if pending or digest_due:
+    last_heartbeat = saved.get('heartbeat_at')
+    heartbeat_due = heartbeat is not None and (type(last_heartbeat) is not int or now - last_heartbeat >= 7 * 86400)
+    if type(last_heartbeat) is int:
+        state['notification']['heartbeat_at'] = last_heartbeat
+    if pending or digest_due or heartbeat_due:
         save_pending()
     if pending:
-        outcome = send(sorted(item['text'] for item in pending.values()), delayed=delayed, **destination)
+        ordered = sorted(pending.values(), key=lambda item: item['text'])
+        finding_id = next((item['finding_id'] for item in ordered
+                           if isinstance(item.get('finding_id'), str)
+                           and re.fullmatch(r'[0-9]{8}T[0-9]{6}\.[0-9]{6}Z:E[1-9][0-9]*',
+                                            item['finding_id'])), None)
+        lines = [item['text'] for item in ordered]
+        if heartbeat is not None:
+            lines = [line for brief in incident_briefs(ordered) for line in brief]
+        outcome = send(lines, delayed=delayed,
+                       **({'finding_id': finding_id} if finding_id else {}), **destination)
         outcomes.append(outcome)
         if outcome['status'] == 'accepted':
             paged.update({key: now for key in pending})
@@ -237,7 +279,34 @@ def deliver_notification(state, findings, save_pending, now=None, *, level=DEFAU
         if outcome['status'] == 'accepted':
             digest.clear()
             state['notification']['digest_day'] = day
+    if heartbeat_due:
+        result = send([heartbeat], mode='heartbeat', **destination)
+        outcomes.append(result)
+        if result['status'] == 'accepted':
+            state['notification']['heartbeat_at'] = now
     outcome = (next((o for o in outcomes if o['status'] == 'failed'), None) or next((o for o in outcomes if o['status'] == 'accepted'), None)
                or {'status': 'unchanged' if pages else 'quiet'})
     state['notification']['delivery'] = outcome
     return outcome
+
+
+def incident_briefs(items):
+    grouped = {}
+    for item in items:
+        grouped.setdefault(item.get('origin', 'monitor'), []).append(item)
+    for origin, group in grouped.items():
+        details = '; '.join(item['text'] for item in group)
+        events = {event for item in group for event in item['page_events']}
+        if events & {'dns_feed_match', 'dns_suffix', 'link_feed_hit'}:
+            reason = 'The observed destination matches a threat indicator.'
+        elif 'login_burst' in events:
+            reason = 'Repeated sign-in failures can indicate an attempt to gain access.'
+        elif events & {'new_ports', 'baseline_drift', 'risky_service', 'risky_new_device'}:
+            reason = 'The services exposed on this device warrant review against its approved baseline.'
+        else:
+            reason = 'This activity meets your configured notification policy.'
+        evidence = next((item['finding_id'] for item in group
+                         if isinstance(item.get('finding_id'), str) and re.fullmatch(
+                             r'[0-9]{8}T[0-9]{6}\.[0-9]{6}Z:E[1-9][0-9]*', item['finding_id'])), None)
+        command = 'coldguardian explain ' + evidence if evidence else 'coldguardian status --json'
+        yield (f'{origin}: {details}', reason, command)

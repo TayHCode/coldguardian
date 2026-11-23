@@ -138,14 +138,14 @@ def update_cache(outdir, feed):
     return len(links)
 
 
-def read_cache(outdir, feed):
+def cached_indicators(outdir, feed):
     if feed is None:
-        return set(), set(), 'feed_cache_missing'
+        return set(), set(), 'feed_cache_missing', None
     try:
         source = source_id(feed)
         cache = load_json(outdir / CACHE_NAME)
         if cache is None:
-            return set(), set(), 'feed_cache_missing'
+            return set(), set(), 'feed_cache_missing', None
         if not isinstance(cache, dict) or cache.get('source') != source:
             raise ValueError('cache does not match the configured feed')
         links, domains, updated_at = cache.get('links'), cache.get('domains'), cache.get('updated_at')
@@ -156,8 +156,13 @@ def read_cache(outdir, feed):
                 or not all(isinstance(domain, str) and domain_key(domain) == domain for domain in domains)):
             raise ValueError('invalid feed cache')
     except (OSError, ValueError, OverflowError, RecursionError):
-        return set(), set(), 'feed_cache_invalid'
-    return set(links), set(domains), 'feed_cache_stale' if age > MAX_AGE else None
+        return set(), set(), 'feed_cache_invalid', None
+    return set(links), set(domains), 'feed_cache_stale' if age > MAX_AGE else None, updated_at
+
+
+def read_cache(outdir, feed):
+    links, domains, warning, _ = cached_indicators(outdir, feed)
+    return links, domains, warning
 
 
 def run_command(args):

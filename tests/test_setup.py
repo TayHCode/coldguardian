@@ -2,8 +2,13 @@ import contextlib
 import io
 import json
 import os
+import runpy
+import socket
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +33,7 @@ class SetupTest(unittest.TestCase):
         self.enterContext(patch.object(wizard.shutil, 'which', return_value='/usr/bin/nmap'))
         self.enterContext(patch.object(wizard, 'detect_scope', side_effect=lambda: SCOPE.copy()))
         self.enterContext(patch.object(cli, 'open_log', side_effect=FileNotFoundError))
+        self.enterContext(patch('sys.stdin', io.StringIO()))
         self.output = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
 
     def scan_with(self, *answers):
@@ -44,7 +50,8 @@ class SetupTest(unittest.TestCase):
         return result
 
     def test_setup_approves_displayed_scan_and_uninstall_removes_installed_files(self):
-        with patch('coldguardian.timers._systemctl') as systemctl:
+        with (patch('coldguardian.timers._systemctl') as systemctl,
+              patch('coldguardian.timers._completed_scan_timestamp', side_effect=['baseline', 'quick', 'deep'])):
             self.assertEqual(self.scan_with('yes', 'medium timer', 'none', 'none', 'yes'), 0)
             config = Path.home() / '.config/coldguardian/config.json'
             state = Path.home() / '.local/state/coldguardian'
@@ -62,6 +69,54 @@ class SetupTest(unittest.TestCase):
             self.assertEqual(list(units.iterdir()), [])
             self.assertEqual(cli.main(['uninstall']), 0)
 
+    def test_scheduled_scan_distinguishes_reported_findings_from_a_python_failure(self):
+        for scan_code, service_code in ((0, 0), (1, 0), (2, 2)):
+            with (self.subTest(code=scan_code), patch.object(cli, 'main', return_value=scan_code),
+                  self.assertRaises(SystemExit) as exit_status):
+                runpy.run_module('coldguardian.scheduled', run_name='__main__')
+            self.assertEqual(exit_status.exception.code, service_code)
+        with patch.object(cli, 'main', side_effect=RuntimeError), self.assertRaises(RuntimeError):
+            runpy.run_module('coldguardian.scheduled', run_name='__main__')
+
+    def test_skipped_service_cannot_reuse_the_baseline_scan(self):
+        with patch('coldguardian.timers._systemctl') as systemctl:
+            self.assertEqual(self.scan_with('yes', 'low timer', 'none', 'none', 'yes'), 2)
+        self.assertFalse(any(call.args[0] == 'enable' for call in systemctl.call_args_list))
+
+    def test_incomplete_scheduled_network_scan_fails_timer_opt_in(self):
+        self.assertEqual(self.scan_with('yes', 'low', 'none', 'none', 'yes'), 0)
+        discovery = '<nmaprun><host>' + NMAP_HOST + '</host>' + NMAP_DONE
+
+        def run_service(*args):
+            if args != ('start', 'coldguardian-quick.service'):
+                return
+            with (patch('sys.argv', ['scheduled', '--quick', '--config', str(wizard.setup_config())]),
+                  patch('coldguardian.scan.command', side_effect=[discovery, OSError('tcp scan failed')]),
+                  self.assertRaises(SystemExit) as result):
+                runpy.run_module('coldguardian.scheduled', run_name='__main__')
+            if result.exception.code:
+                raise subprocess.CalledProcessError(result.exception.code, ['systemctl', '--user', *args])
+
+        with (patch('builtins.input', return_value='timer'), patch.object(cli, 'peer_changes', return_value=([], [])),
+              patch('coldguardian.timers._systemctl', side_effect=run_service) as systemctl):
+            self.assertEqual(cli.main(['setup']), 2)
+        self.assertIn('Network scan incomplete', (wizard.setup_state() / 'latest.md').read_text())
+        self.assertFalse(any(call.args[0] == 'enable' for call in systemctl.call_args_list))
+
+    def test_failed_sandboxed_scan_reports_the_unit_before_enabling_timers(self):
+        def fail_deep(*args):
+            if args == ('start', 'coldguardian-deep.service'):
+                raise subprocess.CalledProcessError(1, ['systemctl', '--user', *args])
+
+        with (patch('coldguardian.timers._systemctl', side_effect=fail_deep) as systemctl,
+              patch('coldguardian.timers._completed_scan_timestamp', side_effect=['baseline', 'quick']),
+              contextlib.redirect_stderr(io.StringIO()) as errors):
+            self.assertEqual(self.scan_with('yes', 'medium timer', 'none', 'none', 'yes'), 2)
+        self.assertIn('coldguardian-deep.service', errors.getvalue())
+        self.assertNotIn('Enabled ', self.output.getvalue())
+        self.assertFalse(any(call.args[0] == 'enable' for call in systemctl.call_args_list))
+        self.assertTrue((wizard.setup_state() / 'baseline.json').is_file())
+
     def test_setup_declines_scope_before_writing_or_scanning(self):
         with patch('builtins.input', return_value='yuck') as prompts, patch.object(cli, 'run') as scan:
             self.assertEqual(cli.main(['setup']), 0)
@@ -76,7 +131,7 @@ class SetupTest(unittest.TestCase):
             self.assertEqual(cli.main(['setup', '--json']), 0)
         self.assertIn('Approve this scope? [y/N]', prompts.getvalue())
         self.assertEqual(json.loads(self.output.getvalue()), {
-            'command': 'setup', 'status': 'declined', 'exit_code': 0,
+            'schema_version': 1, 'command': 'setup', 'status': 'declined', 'exit_code': 0,
         })
         scan.assert_not_called()
         self.assertEqual(list(Path.home().iterdir()), [])
@@ -100,3 +155,112 @@ class SetupTest(unittest.TestCase):
             response.read.return_value = b'{}'
             self.assertEqual(cli.main(['--test-notification']), 0)
         self.assertEqual(send.call_args.args[0].full_url, 'http://localhost:8080/ntfy/example-topic')
+
+    def test_resume_preserves_settings_reports_and_approved_baseline(self):
+        self.assertEqual(self.scan_with('yes', 'low', '', '', 'no'), 2)
+        path = wizard.setup_config()
+        state = wizard.setup_state()
+        settings = path.read_bytes()
+        archive, = state.glob('*Z.md')
+        report = archive.read_bytes()
+        with patch.object(wizard, 'detect_scope', side_effect=AssertionError):
+            self.assertEqual(self.scan_with('', 'yes'), 0)
+        baseline = state / 'baseline.json'
+        approved = baseline.read_bytes()
+        with patch('builtins.input', return_value=''), patch('coldguardian.scan.command') as nmap:
+            self.assertEqual(cli.main(['setup']), 0)
+        nmap.assert_not_called()
+        self.assertEqual(path.read_bytes(), settings)
+        self.assertEqual(baseline.read_bytes(), approved)
+        self.assertEqual(archive.read_bytes(), report)
+
+    def test_low_offers_deep_inventory_before_timer(self):
+        calls = []
+        def run(settings, *, profile, **kwargs):
+            calls.append(profile)
+            return int(profile == 'deep')
+        def answer(prompt):
+            if prompt.startswith('Level'):
+                self.assertIn('unknown device', self.output.getvalue())
+                self.assertIn('deep', prompt)
+                return 'low deep timer'
+            return 'yes' if 'scope' in prompt else ''
+        with (patch.object(cli, 'run', side_effect=run), patch('builtins.input', side_effect=answer),
+              patch.object(wizard, 'check_user_manager'), patch.object(wizard, 'install_scan_timers',
+                    side_effect=lambda level, output_dir: calls.append(level))):
+            self.assertEqual(cli.main(['setup']), 0)
+        self.assertEqual(calls, ['quick', 'deep', 'low'])
+
+    def test_setup_cancels_with_an_open_input_pipe(self):
+        path = wizard.setup_config()
+        path.parent.mkdir(parents=True)
+        wizard.write_config(path, dict(SCOPE, output_dir=str(wizard.setup_state())))
+        for name in ('nmap', 'ip'):
+            shim = Path.home() / name
+            shim.write_text('#!/bin/sh\nexit 99\n')
+            shim.chmod(0o700)
+        reader, writer = socket.socketpair()
+        with reader, writer:
+            for name, stdin in [('pipe', subprocess.PIPE), ('socket', reader)]:
+                with self.subTest(stdin=name), subprocess.Popen(
+                    [sys.executable, '-m', 'coldguardian.cli', 'setup', '--json'],
+                    stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, env=dict(os.environ, PATH=str(Path.home())),
+                ) as process:
+                    try:
+                        self.assertEqual(process.wait(timeout=5), 2)
+                    finally:
+                        process.kill()
+                    self.assertEqual(json.load(process.stdout), {
+                        'schema_version': 1, 'command': 'setup', 'status': 'canceled', 'exit_code': 2,
+                    })
+                    self.assertIn('status --json', process.stderr.read())
+        self.assertFalse(wizard.setup_state().exists())
+
+    def test_json_setup_accepts_a_fragmented_pipe_answer(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd) as reader, os.fdopen(write_fd, 'wb', buffering=0) as writer:
+            writer.write(b'n')
+            finish = threading.Timer(0.1, writer.write, args=(b'o\n',))
+            finish.start()
+            try:
+                with patch('sys.stdin', reader), patch.object(cli, 'run') as scan:
+                    self.assertEqual(cli.main(['setup', '--json']), 0)
+                scan.assert_not_called()
+            finally:
+                finish.join()
+        self.assertFalse(wizard.setup_config().exists())
+
+    def test_plain_setup_records_a_delayed_piped_level(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd) as reader, os.fdopen(write_fd, 'wb', buffering=0) as writer:
+            writer.write(b'yes\n')
+            finish = threading.Timer(3, writer.write, args=(b'low\nnone\nnone\n',))
+            finish.start()
+            try:
+                with patch('sys.stdin', reader), patch.object(cli, 'run', return_value=0):
+                    self.assertEqual(cli.main(['setup']), 0)
+            finally:
+                finish.join()
+        self.assertEqual(json.loads(wizard.setup_config().read_bytes())['level'], 'low')
+
+    def test_plain_setup_exits_on_piped_eof(self):
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with os.fdopen(read_fd) as reader, patch('sys.stdin', reader), patch.object(cli, 'run') as scan:
+            self.assertEqual(cli.main(['setup']), 2)
+        scan.assert_not_called()
+        self.assertFalse(wizard.setup_config().exists())
+
+    def test_existing_mismatched_baseline_survives_resume(self):
+        self.assertEqual(self.scan_with('yes', 'low', '', '', 'yes'), 0)
+        path = wizard.setup_state() / 'baseline.json'
+        original = json.loads(path.read_bytes())
+        original['fingerprint'] = 'previous scope'
+        path.write_text(json.dumps(original))
+        with (patch('builtins.input', return_value='timer'), patch.object(wizard, 'check_user_manager'),
+              patch.object(wizard, 'install_scan_timers') as timers, patch('coldguardian.scan.command') as nmap):
+            self.assertEqual(cli.main(['setup']), 2)
+        self.assertEqual(json.loads(path.read_bytes()), original)
+        nmap.assert_not_called()
+        timers.assert_not_called()

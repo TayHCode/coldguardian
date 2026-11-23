@@ -11,7 +11,7 @@ from .scan import AUTH_METHOD, HOST_NAME, PRODUCT, SERVICE, finding, valid_ip
 from .rules import RULE_ID
 
 
-DNS_TELEMETRY = {'dns_long_label', 'dns_entropy'}
+DNS_TELEMETRY = {'dns_long_label', 'dns_entropy', 'dns_first_seen_burst'}
 REPORT_OBSERVATIONS = {'observed_host', 'scan_summary', 'source_summary', 'service'}
 ARCHIVE_STAMP = '%Y%m%dT%H%M%S.%fZ'
 DEFAULT_REPORT_COUNT = 50
@@ -22,6 +22,10 @@ def evidence_fields(item, index):
         'check': item.get('rule', item.get('component', item['category'])),
         'evidence_id': f'E{index + 1}',
     }
+
+
+def qualified_finding_id(stamp, index):
+    return f'{stamp}:E{index + 1}'
 
 
 class JournalCorruption(ValueError):
@@ -129,7 +133,8 @@ def scan_document(findings, profile, level, record=None):
                                  resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
         'findings': [
             dict(item, **evidence_fields(item, i),
-                 **({'finding_id': f"{record['timestamp']}:E{i + 1}"} if record else {}))
+                 **{k: findings[i][k] for k in ('delivery_class', 'triage_label', 'triage_reason') if k in findings[i]},
+                 **({'finding_id': qualified_finding_id(record['timestamp'], i)} if record else {}))
             for i, item in enumerate(map(safe_finding, findings))
         ],
     }
@@ -160,7 +165,7 @@ COVERAGE_MESSAGES = {
 }
 
 
-def atomic_text(path, text):
+def atomic_text(path, text, *, create_only=False):
     fd, name = tempfile.mkstemp(prefix='.coldguardian-', dir=path.parent)
     try:
         with os.fdopen(fd, 'w') as out:
@@ -168,7 +173,10 @@ def atomic_text(path, text):
             out.write(text)
             out.flush()
             os.fsync(out.fileno())
-        os.replace(name, path)
+        if create_only:
+            os.link(name, path)
+        else:
+            os.replace(name, path)
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
@@ -201,7 +209,7 @@ def safe_finding(f):
     categories = {'new_device', 'new_ports', 'observed_host', 'auth_failed', 'dns_suffix', 'dns_long_label', 'dns_entropy', 'coverage', 'baseline_missing', 'baseline_mismatch', 'baseline_scope_review', 'baseline_approved', 'baseline_enrolled', 'scan_summary', 'source_summary',
                   'service', 'dns_feed_match', 'link_feed_hit', 'login_burst', 'risky_service', 'peer_change', 'baseline_drift'}
     category = f.get('category')
-    result = {'category': category if isinstance(category, str) and category in categories else 'other'}
+    result = {'category': category if isinstance(category, str) and category in categories | DNS_TELEMETRY else 'other'}
     for key in ('ip', 'client_ip'):
         if valid_ip(f.get(key)):
             result[key] = valid_ip(f[key])
@@ -334,7 +342,7 @@ def report_text(findings, explanations, stamp, *, scanner_peak_rss_kib=None):
         elif category == 'risky_service' and 'rule' in f and 'port' in f and 'title' in raw and 'reason' in raw:
             line = f'{raw["title"]} ({address}:{f["port"]}). {raw["reason"]}'
         elif category in DNS_TELEMETRY | {'dns_suffix', 'auth_failed'}:
-            label = {'dns_long_label': 'Long DNS label', 'dns_entropy': 'High-entropy DNS label', 'dns_suffix': 'Configured DNS suffix match', 'auth_failed': 'Failed authentication'}[category]
+            label = {'dns_first_seen_burst': 'First-seen DNS burst', 'dns_long_label': 'Long DNS label', 'dns_entropy': 'High-entropy DNS label', 'dns_suffix': 'Configured DNS suffix match', 'auth_failed': 'Failed authentication'}[category]
             line = label + ' events' + source + client + ': ' + count + '. Low-confidence indicator; this count does not confirm an attack.'
             if category in DNS_TELEMETRY:
                 section = observations
@@ -362,6 +370,8 @@ def report_text(findings, explanations, stamp, *, scanner_peak_rss_kib=None):
             continue
         else:
             line = 'An additional finding needs review. Next step: review the local monitoring checks.'
+        if raw.get('triage_label') in ('real_threat', 'review_later', 'likely_household'):
+            line += f' Local triage: {raw["triage_label"]}. {raw["triage_reason"]}'
         evidence = evidence_fields(f, index)
         key = evidence['evidence_id']
         if key in explanations:
@@ -371,6 +381,11 @@ def report_text(findings, explanations, stamp, *, scanner_peak_rss_kib=None):
     if scanner_peak_rss_kib is not None:
         text += f'Scanner peak RSS: {scanner_peak_rss_kib} KiB\n\n'
     text += '\n'.join('- ' + line for line in security) if security else 'No new security findings were observed in the completed checks.'
+    if any(f.get('delivery_class') == 'hard_page' for f in findings):
+        from .notify import incident_briefs, notification_items
+        items = notification_items(findings, stamp=stamp, group_by_origin=True)
+        briefs = incident_briefs(item for item in items.values() if 'hard_page' in item['page_events'])
+        text += '\n\n## Incident briefs\n\n' + '\n\n'.join('  \n'.join(lines) for lines in briefs)
     text += '\n\n## Coverage\n\n' + ('\n'.join('- ' + line for line in coverage) if coverage else 'No coverage issues were reported.')
     if services:
         text += '\n\n## Services seen\n\n' + '\n'.join('- ' + line for line in services)
@@ -455,14 +470,17 @@ def report(outdir, findings, explanations=None, notify=None, *, emit=True, max_a
         out.write(text)
         out.flush()
         os.fsync(out.fileno())
-    outcome = None
+    record = {'timestamp': stamp, 'scanner_peak_rss_kib': peak,
+              'findings': findings, 'model_explanations': explanations}
     if notify is not None:
+        record['evidence'] = [evidence_fields(f, i) for i, f in enumerate(findings)]
+        save_history(outdir, rows, extra, record, expired)
         directory = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
         finally:
             os.close(directory)
-        outcome = notify()
+        outcome = notify(stamp)
         if outcome['status'] == 'failed':
             findings.append(finding('coverage', component='notification_delivery'))
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -472,11 +490,8 @@ def report(outdir, findings, explanations=None, notify=None, *, emit=True, max_a
                     'quiet': 'No phone notification was needed.'}
         text += '\n' + messages[outcome['status']] + '\n'
         atomic_text(outdir / (stamp + '.md'), text)
-    record = {'timestamp': stamp, 'scanner_peak_rss_kib': peak,
-              'findings': findings, 'model_explanations': explanations}
+        record.update(scanner_peak_rss_kib=peak, notification=outcome)
     record['evidence'] = [evidence_fields(f, i) for i, f in enumerate(findings)]
-    if outcome is not None:
-        record['notification'] = outcome
     save_history(outdir, rows, extra, record, expired)
     atomic_text(outdir / 'latest.md', text)
     if save_scan is not None:

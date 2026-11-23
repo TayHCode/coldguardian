@@ -7,8 +7,10 @@ def valid_topic(topic):
 
 
 def validate_ntfy(target):
-    if not isinstance(target, dict) or set(target) != {'server', 'topic'} or not valid_topic(target['topic']):
+    if not isinstance(target, dict) or set(target) not in ({'server', 'topic'}, {'server', 'topic', 'detail'}) or not valid_topic(target['topic']):
         raise ValueError('ntfy needs a server URL and a topic of 1–64 letters, digits, underscores, or hyphens')
+    if target.get('detail', 'full') not in ('full', 'blank'):
+        raise ValueError('ntfy detail must be full or blank')
     server = target['server']
     try:
         if not isinstance(server, str) or not server.isascii() or re.search(r'[\s\x00-\x1f\x7f\\?#]', server):

@@ -2,6 +2,8 @@ import http.client
 import ipaddress
 import json
 import socket
+import signal
+import time
 from urllib.parse import urlsplit
 
 from .scope import private_address
@@ -93,10 +95,10 @@ def parse_explanation(message, evidence):
     return explanation
 
 
-def chat(target, payload, *, path=CHAT_PATH):
+def chat(target, payload, *, path=CHAT_PATH, timeout=TIMEOUT):
     scheme, host, port = target
     connection_type = http.client.HTTPSConnection if scheme == 'https' else http.client.HTTPConnection
-    connection = connection_type(host, port, timeout=TIMEOUT)
+    connection = connection_type(host, port, timeout=timeout)
     try:
         connection.request('POST', path, json.dumps(payload), {'Content-Type': 'application/json'})
         with connection.getresponse() as response:
@@ -152,3 +154,46 @@ def explain_with(send, evidence, lookup=None, *, model_id=None, seed=None):
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return None
     return parse_explanation(message, observations)
+
+
+TRIAGE_REASONS = {
+    'likely_household': 'The observed ports fit an ordinary household device.',
+    'review_later': 'The observed ports warrant a routine inventory review.',
+    'real_threat': 'The observed ports warrant prompt investigation.',
+}
+
+
+def device_triage(url, ports, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    payload = {
+        'messages': [
+            {'role': 'system', 'content': 'Classify a new household device from its open TCP ports. '
+             'Select one label and its exact matching reason from ' + json.dumps(TRIAGE_REASONS)
+             + '. Return only a JSON object with label and reason.'},
+            {'role': 'user', 'content': json.dumps({'open_tcp_ports': ports})},
+        ],
+        'response_format': {'type': 'json_object'}, 'temperature': 0, 'max_tokens': 96, 'stream': False,
+    }
+
+    def timeout(*_):
+        raise TimeoutError
+
+    handler = signal.signal(signal.SIGALRM, timeout)
+    timer = signal.setitimer(signal.ITIMER_REAL, remaining)
+    try:
+        message, finish = chat(endpoint(url), payload, timeout=remaining)
+        if finish != 'stop' or message.get('tool_calls') or message.get('function_call'):
+            return None
+        result = json.loads(message['content'], object_pairs_hook=unique_object)
+        if isinstance(result, dict) and result.keys() == {'label', 'reason'}:
+            label = result['label']
+            if isinstance(label, str) and label in TRIAGE_REASONS and result['reason'] == TRIAGE_REASONS[label]:
+                return label, result['reason']
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return None
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *timer)
+        signal.signal(signal.SIGALRM, handler)
+    return None

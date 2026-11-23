@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from . import feeds, model, notify, wizard
+from . import dnswatch, feeds, model, notify, triage, wizard
 from .baseline import approved_snapshot, compare_devices, differences
 from .endpoints import validate_ntfy
 from .levels import DEFAULT_LEVEL, LEVELS
@@ -68,7 +68,9 @@ def burst_count(times):
     return largest
 
 
-def dns_category(domain, suffixes):
+def dns_category(domain, suffixes, feed_domains=frozenset()):
+    if feed_domains and feeds.domain_key(domain) in feed_domains:
+        return 'dns_feed_match'
     domain = domain.lower().rstrip('.')
     if any(domain == s or domain.endswith('.' + s) for s in suffixes):
         return 'dns_suffix'
@@ -82,7 +84,7 @@ def dns_category(domain, suffixes):
     return None
 
 
-def summarize_logs(data, kind, suffixes, feed_domains=frozenset()):
+def summarize_logs(data, kind, suffixes, feed_domains=frozenset(), observations=None):
     counts = collections.Counter()
     invalid = 0
     for line in data.splitlines():
@@ -95,6 +97,7 @@ def summarize_logs(data, kind, suffixes, feed_domains=frozenset()):
                 if not isinstance(domain, str) or not client:
                     raise ValueError('invalid DNS row')
             except (ValueError, TypeError, KeyError):
+                row = None
                 match = re.search(r'query\[[^\]]+\]\s+(\S+)\s+from\s+(\S+)', line)
                 if not match:
                     invalid += 1
@@ -103,9 +106,17 @@ def summarize_logs(data, kind, suffixes, feed_domains=frozenset()):
                 if not client:
                     invalid += 1
                     continue
-            category = dns_category(domain, suffixes)
-            if feed_domains and feeds.domain_key(domain) in feed_domains:
-                category = 'dns_feed_match'
+            if observations is not None:
+                if row is None:
+                    stamp = auth_time(line, datetime.now())
+                else:
+                    try:
+                        stamp = datetime.fromisoformat(row['T'].replace('Z', '+00:00')).timestamp()
+                    except (ValueError, KeyError, AttributeError, TypeError, OverflowError, OSError):
+                        stamp = None
+                if stamp is not None:
+                    observations.append((stamp, client, domain))
+            category = dns_category(domain, suffixes, feed_domains)
             if category:
                 counts[(category, client)] += 1
         elif AUTH_FAILURE.search(line):
@@ -192,11 +203,25 @@ def collect(c, checkpoints, cached_domains=None):
     feed_domains, warning = cached_feed_domains(c) if cached_domains is None else cached_domains
     if c.get('feed') is not None and warning:
         findings.append(finding('coverage', component=warning))
-    if host is None:
-        return pending, findings
+    observations = [] if 'tiers' in c or 'dns_api' in c else None
+    if 'dns_api' in c:
+        source = c['dns_api']
+        address = c['hosts'][source['host']]
+        key = f"dns:{source['provider']}:{address}:{source.get('port', 443)}"
+        rows, pending[key], issues = dnswatch.api_queries(source, address, checkpoints.get(key, {}), int(time.time()))
+        observations.extend(rows)
+        counts = collections.Counter()
+        for _, client, domain in rows:
+            category = dns_category(domain, c['suspicious_domains'], feed_domains)
+            if category:
+                counts[(category, client)] += 1
+        fields = {'kind': 'dns', 'host': source['host']}
+        findings.extend(finding(cat, client_ip=client, count=count, **fields) for (cat, client), count in counts.items())
+        findings.extend(finding('coverage', component=issue, **fields) for issue in sorted(issues))
+        findings.append(finding('source_summary', status='partial' if issues else 'ok', **fields))
     deadline = time.monotonic() + COLLECT_SECONDS
     paths = [('auth', p) for p in c['auth_paths']] + [('dns', p) for p in c['dns_paths']]
-    for kind, path in paths:
+    for kind, path in (paths if host is not None else ()):
         if time.monotonic() >= deadline:
             findings.append(finding('coverage', component='log_backlog', host=host, kind=kind))
             findings.append(finding('source_summary', host=host, kind=kind, status='partial'))
@@ -214,7 +239,7 @@ def collect(c, checkpoints, cached_domains=None):
                 else:
                     start = max(0, info.st_size - READ_LIMIT)
                     data, end = read_log_chunk(log, start, discard_partial=True)
-                    rows = summarize_logs(data, 'dns', c['suspicious_domains'], feed_domains)
+                    rows = summarize_logs(data, 'dns', c['suspicious_domains'], feed_domains, observations)
                     issues = {'history_skipped'} if start else set()
                     if end < info.st_size:
                         issues.add('backlog')
@@ -223,6 +248,10 @@ def collect(c, checkpoints, cached_domains=None):
             issues = {'read'}
         findings.append(finding('source_summary', host=host, kind=kind, status='partial' if issues else 'ok'))
         findings.extend(finding('coverage', component='log_' + issue, host=host, kind=kind) for issue in sorted(issues))
+    if observations is not None:
+        bursts, pending['dns_seen'] = dnswatch.first_seen_bursts(observations, checkpoints.get('dns_seen', {}), time.time())
+        findings.extend(finding('dns_first_seen_burst', client_ip=ip, count=count, window_seconds=60)
+                        for ip, count in bursts.items())
     return pending, findings
 
 
@@ -330,6 +359,16 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
                 approved = approved_snapshot({'snapshot': dict(baseline, complete=True)}, c)
         except (OSError, ValueError, TypeError, KeyError):
             baseline_error = True
+        if confirm_baseline is not None:
+            if baseline_error or (os.path.lexists(outdir / 'baseline.json') and approved is None):
+                print('Restore the matching saved configuration and baseline before rerunning coldguardian setup.', file=sys.stderr)
+                return 2
+            if findings:
+                print('Repair or restore state.json before rerunning coldguardian setup.', file=sys.stderr)
+                return 2
+            if approved is not None:
+                print('Keeping the approved baseline.')
+                return 0
         if profile == 'deep':
             if c['_port_count'] < 65535:
                 top_ports = None
@@ -350,8 +389,12 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
             findings.extend(finding('observed_host', ip=ip, ports=ports) for ip, ports in sorted(snapshot.items()))
         elif approved is None:
             findings.append(finding('baseline_mismatch'))
-        elif c['level'] == 'high' or not network_complete:
+        elif 'tiers' in c or c['level'] == 'high' or not network_complete:
             findings.extend(differences(snapshot, approved_hosts, compare_missing_ports=top_ports is None))
+            if 'tiers' in c:
+                old_macs = approved.get('macs', {})
+                findings.extend(finding('new_device', ip=ip) for ip, mac in macs.items()
+                                if ip in old_macs and mac != old_macs[ip])
         else:
             risky_ips = {f['ip'] for f in scan_findings if f['category'] == 'risky_service'}
             findings.extend(compare_devices(snapshot, approved, macs, risky_ips, compare_missing_ports=top_ports is None))
@@ -360,13 +403,31 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
         checkpoints, log_findings = collect(c, state.get('checkpoints', {}), cached_domains)
         findings.extend(log_findings)
         findings.insert(0, finding('scan_summary', host_count=len(snapshot), network_complete=network_complete, log_sources=sum(f['category'] == 'source_summary' for f in log_findings), log_coverage_complete=not any(f['category'] == 'coverage' for f in log_findings)))
+        complete = not any(f['category'] == 'coverage' and not f.get('optional') for f in findings)
+        if confirm_baseline is None:
+            dns_complete = not any(f['category'] == 'coverage' for f in log_findings)
+            triage.classify(c, findings, snapshot, macs, (approved or {}).get('macs', {}),
+                            complete=network_complete and dns_complete and profile == 'deep')
         approvals = [entry['finding'] for entry in (approved or {}).get('approvals', [])]
 
-        def notify_pending():
+        last_success = scan_timestamps(c, state)
+        if complete and approved is not None:
+            last_success[profile] = int(time.time())
+
+        def notify_pending(stamp):
+            heartbeat = None
+            if 'tiers' in c:
+                health = freshness(c, last_success)
+                if any(v['status'] not in ('fresh', 'unscheduled') for v in health.values()) or not complete:
+                    heartbeat = 'Monitoring is incomplete. Check coldguardian status --json and the local report.'
+                elif any(f.get('delivery_class') == 'hard_page' for f in findings):
+                    heartbeat = 'Monitoring is current. Threat findings are in the local report.'
+                else:
+                    heartbeat = 'Monitoring is current. Review the local report for this week’s observations.'
             return notify.deliver_notification(
                 state, findings, lambda: atomic_json(outdir / 'state.json', state),
                 level=c.get('level', DEFAULT_LEVEL), target=c.get('ntfy', notify.LEGACY_TARGET),
-                approvals=approvals,
+                approvals=approvals, stamp=stamp, heartbeat=heartbeat,
             )
 
         def save_scan(stamp):
@@ -374,7 +435,7 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
                 previous = approved_snapshot(state, c)['hosts']
             except (AttributeError, ValueError, TypeError, KeyError):
                 previous = {}
-            state.update(checkpoints=checkpoints, snapshot={'fingerprint': c['_fingerprint'], 'complete': network_complete, 'hosts': snapshot},
+            state.update(last_success=last_success, checkpoints=checkpoints, snapshot={'fingerprint': c['_fingerprint'], 'complete': network_complete, 'hosts': snapshot},
                          report_timestamp=stamp, previous_hosts=previous)
             if macs:
                 state['snapshot']['macs'] = macs
@@ -389,10 +450,10 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
             try:
                 baseline = approved_snapshot(state, c)
             except ValueError:
-                print('The scan did not produce a complete baseline.', file=sys.stderr)
+                print('The scan did not produce a complete baseline. Review the report and rerun coldguardian setup.', file=sys.stderr)
                 return 2
             if not confirm_baseline():
-                print('Baseline left unapproved.')
+                print('Baseline left unapproved. Rerun coldguardian setup to resume.')
                 return 2
             atomic_json(outdir / 'baseline.json', baseline)
             print(f"Approved {outdir / 'baseline.json'}")
@@ -417,6 +478,8 @@ def approve_finding(c, finding_id, reason):
         if (row['timestamp'] != state.get('report_timestamp')
                 or state['snapshot']['fingerprint'] != c['_fingerprint']):
             raise ValueError('Approve findings from the latest scan for this configuration.')
+        if 'tiers' in c and item.get('delivery_class') == 'hard_page':
+            raise ValueError('A hard-threat finding always pages and cannot be approved.')
         item = safe_finding(item)
         if item['category'] in ('coverage', *notify.PAGE_NOTES) or not notify.notification_items([item]):
             raise ValueError('This finding cannot be approved.')
@@ -491,36 +554,76 @@ def management_command(args):
         else:
             try:
                 if command == 'setup':
-                    code, status = wizard.setup(run)
+                    code, status = wizard.setup(run, json_output=args.json)
                 else:
                     code, status = wizard.uninstall(), 'ok'
             except (EOFError, KeyboardInterrupt):
-                print('Canceled.', file=sys.stderr)
+                print('Rerun coldguardian setup to resume. For unattended checks, use coldguardian status --json.'
+                      if command == 'setup' else 'Canceled.', file=sys.stderr)
                 code, status = 2, 'canceled'
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 print(error, file=sys.stderr)
                 code, status = 2, 'failed'
     if args.json:
-        print(json.dumps(dict(command=command, status=status, exit_code=code)))
+        outcome = dict(command=command, status=status, exit_code=code)
+        if command == 'setup':
+            outcome['schema_version'] = 1
+        print(json.dumps(outcome))
     return code
+
+
+def scan_timestamps(c, state):
+    snapshot, history = state.get('snapshot'), state.get('last_success')
+    if isinstance(snapshot, dict) and snapshot.get('fingerprint') == c['_fingerprint'] and isinstance(history, dict):
+        return dict(history)
+    return {}
+
+
+def freshness(c, last_success):
+    day = 86400
+    limits = {'quick': 9 * 3600 if c['level'] == 'high' else 36 * 3600,
+              'deep': {'low': None, 'medium': 8 * day, 'high': 36 * 3600}[c['level']],
+              'feeds': feeds.MAX_AGE if c.get('feed') else None}
+    stamps = dict(last_success)
+    if c.get('feed'):
+        _, _, _, stamps['feeds'] = feeds.cached_indicators(Path(c['output_dir']), c['feed'])
+    now = time.time()
+    result = {}
+    for key, limit in limits.items():
+        stamp = stamps.get(key)
+        valid = type(stamp) is int and 0 <= stamp <= now
+        status = 'unscheduled' if limit is None else 'missing'
+        if limit is not None and valid:
+            status = 'fresh' if now - stamp <= limit else 'stale'
+        result[key] = {'last_success': stamp if valid else None, 'status': status}
+    return result
 
 
 def status_command(args):
     path = Path(args.config) if args.config else wizard.setup_config()
+    details = {}
     try:
         settings = json.loads(path.read_text())
         if not isinstance(settings, dict):
             raise ValueError('configuration must be an object')
-        config(settings)
+        c = config(settings)
     except (OSError, TypeError, ValueError):
         code, status = 2, 'failed'
         print('Could not read or validate the Coldguardian configuration.', file=sys.stderr)
     else:
         code, status = 0, 'ok'
-        if not args.json:
+        if args.json:
+            try:
+                state = load_json(Path(c['output_dir']) / 'state.json')
+            except (OSError, ValueError, RecursionError):
+                state = {}
+            if state is not None or any(k in c for k in ('tiers', 'dns_api', 'feed')):
+                stamps = scan_timestamps(c, state) if isinstance(state, dict) else {}
+                details['freshness'] = freshness(c, stamps)
+        else:
             print('Coldguardian configuration is valid.')
     if args.json:
-        print(json.dumps(dict(command='status', status=status, exit_code=code)))
+        print(json.dumps(dict(command='status', status=status, exit_code=code, **details)))
     return code
 
 

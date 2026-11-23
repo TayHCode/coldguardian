@@ -17,6 +17,7 @@ USER_SYSTEMCTL = {
     'check_user_manager': [('show', '--property=Version')],
     'install_scan_timers': [
         ('daemon-reload',),
+        ('start', 'service'),
         ('enable', '--now', '*(timer.name for timer in timers)'),
     ],
     'remove_scan_timers': [
@@ -66,7 +67,7 @@ class SubprocessTests(unittest.TestCase):
                         self.assertEqual(path.name, 'timers.py')
                         self.assertFalse(node.keywords)
                         systemctl_calls[scopes.get(node)].append(tuple(
-                            ast.unparse(arg) if isinstance(arg, ast.Starred) else ast.literal_eval(arg)
+                            ast.unparse(arg) if isinstance(arg, (ast.Starred, ast.Name)) else ast.literal_eval(arg)
                             for arg in node.args
                         ))
                     elif call.rpartition('.')[2] in LIFECYCLE_CALLERS:
@@ -98,15 +99,17 @@ class SubprocessTests(unittest.TestCase):
         for level, profiles in (('low', ('quick',)), ('medium', ('quick', 'deep')), ('high', ('quick', 'deep'))):
             with (self.subTest(level=level), tempfile.TemporaryDirectory() as directory,
                   patch.object(timers, '_unit_directory', return_value=Path(directory)),
+                  patch.object(timers, '_completed_scan_timestamp', side_effect=[None, 'quick', 'deep']),
                   patch.object(timers.subprocess, 'run') as launch, contextlib.redirect_stdout(io.StringIO())):
                 timers.check_user_manager()
-                timers.install_scan_timers(level)
+                timers.install_scan_timers(level, directory)
                 list(timers.remove_scan_timers())
                 timer_units = [f'coldguardian-{profile}.timer' for profile in profiles]
                 service_units = [f'coldguardian-{profile}.service' for profile in profiles]
                 self.assertEqual([call.args[0] for call in launch.call_args_list], [
                     ['systemctl', '--user', 'show', '--property=Version'],
                     ['systemctl', '--user', 'daemon-reload'],
+                    *(['systemctl', '--user', 'start', service] for service in service_units),
                     ['systemctl', '--user', 'enable', '--now', *timer_units],
                     ['systemctl', '--user', 'disable', '--now', *timer_units],
                     ['systemctl', '--user', 'clean', '--what=state', *timer_units],

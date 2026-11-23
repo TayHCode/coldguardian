@@ -629,21 +629,23 @@ class NotificationTests(unittest.TestCase):
         hosts = {'10.20.29.1': [22]}
         report.atomic_json(output / 'baseline.json', {'fingerprint': c['_fingerprint'], 'hosts': hosts})
         report.atomic_json(output / 'state.json', {'checkpoints': {'auth': 5}, 'snapshot': {'old': True}})
-        def failed(lines, delayed=False):
+        device = n.finding('new_device', ip='10.20.30.9')
+        def failed(lines, delayed=False, *, finding_id):
             self.assertEqual(lines, ['New device at 10.20.30.9'])
             self.assertFalse(delayed)
             initial = list(output.glob('*.md'))
             self.assertEqual(len(initial), 1)
             self.assertIn('New device observed at 10.20.30.9', initial[0].read_text())
-            self.assertFalse((output / 'alerts.jsonl').exists())
+            self.assertEqual(finding_id, initial[0].stem + ':E2')
+            self.assertEqual(report.saved_finding(output, finding_id)[2], device)
             saved = json.loads((output / 'state.json').read_text())
             self.assertEqual(saved['checkpoints'], {'auth': 5})
             self.assertEqual(saved['notification']['pending'], {'new_device:10.20.30.9': {
-                'text': 'New device at 10.20.30.9', 'page_events': ['new_device']}})
+                'text': 'New device at 10.20.30.9', 'page_events': ['new_device'], 'finding_id': finding_id}})
             self.assertEqual(saved['notification']['paged'], {})
             return {'status': 'failed', 'error_type': 'TransportError'}
         with contextlib.redirect_stdout(io.StringIO()), patch.object(n, 'scan', return_value=(hosts, [])):
-            with patch.object(n, 'collect', return_value=({'auth': 100}, [n.finding('new_device', ip='10.20.30.9')])), patch.object(notify, 'send', side_effect=failed):
+            with patch.object(n, 'collect', return_value=({'auth': 100}, [device])), patch.object(notify, 'send', side_effect=failed):
                 self.assertEqual(n.run(c), 1)
             saved = json.loads((output / 'state.json').read_text())
             self.assertEqual(saved['checkpoints'], {'auth': 100})
@@ -655,13 +657,37 @@ class NotificationTests(unittest.TestCase):
             self.assertIn('Phone notification delivery failed', (output / 'latest.md').read_text())
             with patch.object(n, 'collect', return_value=({'auth': 100}, [])), patch.object(notify, 'send', return_value={'status': 'accepted'}) as sender:
                 self.assertEqual(n.run(c), 0)
-                sender.assert_called_once_with(['New device at 10.20.30.9'], delayed=True)
+                finding_id = json.loads(rows[0])['timestamp'] + ':E2'
+                sender.assert_called_once_with(['New device at 10.20.30.9'], delayed=True, finding_id=finding_id)
+                self.assertEqual(report.saved_finding(output, finding_id)[2], device)
                 self.assertEqual(n.run(c), 0)
                 self.assertEqual(sender.call_count, 1)
             saved = json.loads((output / 'state.json').read_text())
             self.assertEqual(saved['notification']['pending'], {})
             self.assertEqual(len((output / 'alerts.jsonl').read_text().splitlines()), 3)
             self.assertNotIn(self.topic, ''.join(p.read_text() for p in output.iterdir()))
+
+    def test_overflow_page_identifies_original_saved_evidence(self):
+        output = self.root / 'reports'
+        output.mkdir()
+        c = settings(str(output))
+        hosts = {'10.20.29.1': [22]}
+        report.atomic_json(output / 'baseline.json', {'fingerprint': c['_fingerprint'], 'hosts': hosts})
+        first = [n.finding('login_burst', host='a-server', client_ip=f'192.0.2.{i}',
+                           count=5, window_seconds=60) for i in range(10, 20)]
+        later = [dict(first[0], count=8)]
+        with self.server() as calls, patch.object(n, 'scan', return_value=(hosts, [])), \
+                patch.object(n, 'collect', side_effect=[({}, first), ({}, later)]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(n.run(c), 1)
+            self.assertEqual(n.run(c), 1)
+        self.assertEqual(len(calls), 1)
+        header, *lines = calls[0][2].decode().splitlines()
+        self.assertIn('+2 more in the local report.', lines)
+        self.assertRegex(header, r'^Saved finding: [0-9]{8}T[0-9]{6}\.[0-9]{6}Z:E2$')
+        finding_id = header.split()[-1]
+        self.assertEqual(report.saved_finding(output, 'E2')[2], later[0])
+        self.assertEqual(report.saved_finding(output, finding_id)[2], first[0])
 
     def test_scan_new_port_calls_real_sender_despite_model_none(self):
         output = self.root / 'reports'
@@ -675,7 +701,11 @@ class NotificationTests(unittest.TestCase):
         with self.server() as calls, patch.object(scan, 'command', side_effect=scan_command), patch.object(n, 'collect', return_value=({}, [])), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(n.run(c), 1)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][2].decode().splitlines(), ['New device at 10.20.29.2', 'New open ports on 10.20.29.1: 80', 'Alert only; nothing was changed.'])
+        header, *lines = calls[0][2].decode().splitlines()
+        self.assertEqual(lines, ['New device at 10.20.29.2', 'New open ports on 10.20.29.1: 80', 'Alert only; nothing was changed.'])
+        self.assertTrue(header.startswith('Saved finding: '))
+        self.assertEqual(report.saved_finding(output, header.split()[-1])[2],
+                         n.finding('new_device', ip='10.20.29.2'))
         state = json.loads((output / 'state.json').read_text())
         self.assertEqual(state['notification']['delivery'], {'status': 'accepted', 'id': 'AbCdEf123456'})
         self.assertEqual(sorted(state['notification']['paged']), ['new_device:10.20.29.2', 'new_ports:10.20.29.1:80'])
@@ -721,8 +751,11 @@ class NotificationTests(unittest.TestCase):
         saved = json.loads((output / 'state.json').read_text())
         self.assertEqual(saved['checkpoints'], {'auth': 5})
         self.assertEqual(saved['notification']['paged'], {})
+        finding_id = sender.call_args.kwargs['finding_id']
         self.assertEqual(saved['notification']['pending'], {'baseline_missing': {
-            'text': notify.PAGE_NOTES['baseline_missing'], 'page_events': ['baseline_missing']}})
+            'text': notify.PAGE_NOTES['baseline_missing'], 'page_events': ['baseline_missing'],
+            'finding_id': finding_id}})
+        self.assertEqual(report.saved_finding(output, finding_id)[2], n.finding('baseline_missing'))
         self.assertEqual(saved['notification']['digest']['auth_failed']['count'], 3)
         self.assertEqual(len((output / 'alerts.jsonl').read_text().splitlines()), 1)
 
