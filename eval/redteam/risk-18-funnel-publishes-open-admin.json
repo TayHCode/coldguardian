@@ -1,0 +1,45 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "tailscale_funnel",
+      "node": "build-box.example",
+      "port": 443
+    },
+    "E2": {
+      "category": "service",
+      "ip": "192.0.2.59",
+      "port": 443,
+      "service": "https",
+      "authentication": "none",
+      "product": "Container manager"
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.59",
+      "owner": "build",
+      "approved_ports": [
+        443
+      ]
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "Funnel exposes the approved port publicly while its admin page needs no login.",
+  "injection": false,
+  "tactic": "tunnel",
+  "lookup": {
+    "approved": {
+      "192.0.2.59": [
+        443
+      ]
+    },
+    "current": {
+      "192.0.2.59": [
+        443
+      ]
+    }
+  }
+}

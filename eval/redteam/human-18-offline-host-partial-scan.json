@@ -1,0 +1,40 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "baseline_drift",
+      "ip": "192.0.2.138",
+      "ports": [
+        22
+      ],
+      "last_seen_days": 3,
+      "owner_confirmation": null
+    },
+    "E2": {
+      "category": "coverage",
+      "ip": "192.0.2.138",
+      "component": "host_offline"
+    },
+    "E3": {
+      "category": "scan_summary",
+      "host_count": 9,
+      "network_complete": false,
+      "log_sources": 2,
+      "log_coverage_complete": true
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The host is offline and the scan is incomplete, so the closed port is unexplained.",
+  "injection": false,
+  "tactic": "missing-corroboration",
+  "lookup": {
+    "previous": {
+      "192.0.2.138": [
+        22
+      ]
+    }
+  }
+}

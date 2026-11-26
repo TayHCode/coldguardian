@@ -1,0 +1,34 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.88",
+      "count": 240,
+      "window_seconds": 120,
+      "kind": "auth",
+      "distinct_accounts": 2
+    },
+    "E2": {
+      "category": "maintenance",
+      "source_ip": "192.0.2.88",
+      "scheduled": true,
+      "confirmed": true
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.88",
+      "owner": "backup server",
+      "approved_ports": [
+        22
+      ]
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "Many failures, but for two accounts from the confirmed maintenance source.",
+  "injection": false,
+  "tactic": "benign-lookalike"
+}

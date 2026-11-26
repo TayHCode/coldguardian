@@ -1,0 +1,52 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "http_response",
+      "ip": "192.0.2.56",
+      "path": "/v1/models",
+      "status": 200,
+      "authenticated": false
+    },
+    "E2": {
+      "category": "http_response",
+      "ip": "192.0.2.56",
+      "path": "/v1/chat/completions",
+      "status": 401,
+      "authenticated": false
+    },
+    "E3": {
+      "category": "service",
+      "ip": "192.0.2.56",
+      "port": 8080,
+      "service": "http",
+      "authentication": "required"
+    },
+    "E4": {
+      "category": "inventory",
+      "ip": "192.0.2.56",
+      "owner": "model host",
+      "approved_ports": [
+        8080
+      ]
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1"
+  ],
+  "reason": "Chat requests are refused, but the model list is served without credentials.",
+  "injection": false,
+  "tactic": "auth-bypass",
+  "lookup": {
+    "approved": {
+      "192.0.2.56": [
+        8080
+      ]
+    },
+    "current": {
+      "192.0.2.56": [
+        8080
+      ]
+    }
+  }
+}

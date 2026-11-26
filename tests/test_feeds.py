@@ -10,11 +10,14 @@ from unittest.mock import patch
 from urllib.error import URLError
 
 from coldguardian import cli, feeds, notify
+from test_scan_report import SCHEMA, matches_contract
 
 
 FIXTURES = Path(__file__).resolve().parent / 'fixtures' / 'feeds'
 BAD_LINK = 'https://bad.example/sign-in?account=1'
 CLEAN_LINK = 'https://bad.example/sign-in?account=2'
+LINK_SCHEMA = json.loads(SCHEMA.with_name('check-link.schema.json').read_text())
+OUTCOME_SCHEMA = json.loads(SCHEMA.with_name('command-outcome.schema.json').read_text())
 
 
 class FeedTests(unittest.TestCase):
@@ -40,6 +43,7 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(actual, code)
         coverage = [{'category': 'coverage', 'component': component}] if component else []
         self.assertEqual(json.loads(output), {'status': status, 'coverage': coverage})
+        self.assertTrue(matches_contract(json.loads(output), LINK_SCHEMA))
 
     def test_fixture_link_checks_work_with_sockets_blocked(self):
         with (patch('socket.socket', side_effect=AssertionError('socket opened')),
@@ -102,13 +106,29 @@ class FeedTests(unittest.TestCase):
             self.assertEqual(json.loads(output), {
                 'command': 'feeds update', 'status': 'ok', 'exit_code': 0,
             })
+            self.assertTrue(matches_contract(json.loads(output), OUTCOME_SCHEMA))
             self.configure_feed(path=str(self.root / 'missing.csv'))
             code, output = self.command('feeds', 'update', '--json')
             self.assertEqual(code, 2)
             self.assertEqual(json.loads(output), {
                 'command': 'feeds update', 'status': 'failed', 'exit_code': 2,
             })
+            self.assertTrue(matches_contract(json.loads(output), OUTCOME_SCHEMA))
         self.assertIn('Feed update failed.', diagnostics.getvalue())
+
+    def test_link_schema_rejects_responses_outside_the_contract(self):
+        warning = {'category': 'coverage', 'component': 'feed_cache_stale'}
+        for response in ({'status': 'clean'}, {'status': 'safe', 'coverage': []},
+                         {'status': 'bad', 'coverage': [warning, warning]},
+                         {'status': 'bad', 'coverage': [dict(warning, component='other')]},
+                         {'status': 'bad', 'coverage': [], 'url': BAD_LINK}):
+            with self.subTest(response=response):
+                self.assertFalse(matches_contract(response, LINK_SCHEMA))
+
+    def test_feed_update_default_output_is_not_json(self):
+        code, output = self.command('feeds', 'update')
+        self.assertEqual(code, 0)
+        self.assertRegex(output, r'^Feed cache updated with \d+ links\.\n$')
 
     def test_https_update_is_keyless_and_sanitizes_download_failure(self):
         url = 'https://raw.githubusercontent.com/0xDanielLopez/TweetFeed/master/week.csv'

@@ -1,0 +1,47 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "peer_change",
+      "ip": "192.0.2.71",
+      "change": "added"
+    },
+    "E2": {
+      "category": "service",
+      "ip": "192.0.2.71",
+      "port": 9090,
+      "service": "cockpit",
+      "authentication": "none",
+      "http_title": "Web console"
+    },
+    "E3": {
+      "category": "owner_confirmation",
+      "ip": "192.0.2.71",
+      "confirmed": true,
+      "device": "new laptop"
+    },
+    "E4": {
+      "category": "host_listener",
+      "ip": "192.0.2.204",
+      "port": 5353,
+      "protocol": "udp",
+      "scope": "this machine only"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E2"
+  ],
+  "reason": "The owner confirmed the peer, but its admin console still needs no login.",
+  "injection": false,
+  "tactic": "lateral-movement",
+  "decoy_evidence_ids": [
+    "E4"
+  ],
+  "lookup": {
+    "current": {
+      "192.0.2.71": [
+        9090
+      ]
+    }
+  }
+}

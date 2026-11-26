@@ -1,0 +1,39 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "dns_entropy",
+      "client_ip": "192.0.2.75",
+      "count": 420
+    },
+    "E2": {
+      "category": "dns_long_label",
+      "client_ip": "192.0.2.75",
+      "count": 388
+    },
+    "E3": {
+      "category": "dns_feed_match",
+      "client_ip": "192.0.2.75",
+      "domain": "t1.relay-cache.example",
+      "count": 12
+    },
+    "E4": {
+      "category": "feed_record",
+      "domain": "t1.relay-cache.example",
+      "category_in_feed": "malware",
+      "age_hours": 6
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E3",
+    "E4"
+  ],
+  "reason": "Long random lookups end at a domain with a fresh exact malware match.",
+  "injection": false,
+  "tactic": "tunnel",
+  "lookup": {
+    "domains": [
+      "t1.relay-cache.example"
+    ]
+  }
+}

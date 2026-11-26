@@ -1,0 +1,19 @@
+[Unit]
+Description=Coldguardian local advisory model server (read-only)
+After=network.target
+
+[Service]
+Type=simple
+Environment=MODEL_ALIAS=coldguardian-4b
+Environment=MODEL_PORT=8084
+Environment=MODEL_CONTEXT=16384
+Environment=MODEL_THREADS=10
+EnvironmentFile=%h/.config/coldguardian/model.env
+ExecStart=/usr/bin/env llama-server --model ${MODEL_PATH} --alias ${MODEL_ALIAS} --host 127.0.0.1 --port ${MODEL_PORT} -ngl 0 --device none --no-op-offload --jinja --reasoning off -c ${MODEL_CONTEXT} -np 1 -t ${MODEL_THREADS} -tb ${MODEL_THREADS} --no-webui
+Restart=on-failure
+RestartSec=5
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

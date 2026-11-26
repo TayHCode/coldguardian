@@ -27,6 +27,7 @@
           "finding_id": {"type": "string", "minLength": 1},
           "evidence_id": {"type": "string", "minLength": 1},
           "ip": {"type": "string"},
+          "network": {"type": "string"},
           "client_ip": {"type": "string"},
           "host": {"type": "string"},
           "kind": {"enum": ["auth", "dns"]},

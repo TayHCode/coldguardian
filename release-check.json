@@ -1,4 +1,5 @@
 {
+  "exclude": ["training", "tests/test_training.py"],
   "quickstart": [
     {
       "file": "README.md",

@@ -17,7 +17,7 @@ FORBIDDEN_FLAGS = {'-A', '-sC', '-O', '--script-args-file', '--script-updatedb',
 
 
 def lab_config(output_dir='/tmp/coldguardian-profiles'):
-    return scan.config({'lan_cidr': '172.31.250.0/29', 'hosts': {'scanner': '172.31.250.1', 'target': '172.31.250.2', 'offline-host': '172.31.250.3'}, 'output_dir': output_dir})
+    return scan.config({'deep_exclusions': [], 'lan_cidr': '172.31.250.0/29', 'hosts': {'scanner': '172.31.250.1', 'target': '172.31.250.2', 'offline-host': '172.31.250.3'}, 'output_dir': output_dir})
 
 
 def recorded(profile, calls, transform=lambda text: text):
@@ -123,8 +123,8 @@ class ProfileTests(unittest.TestCase):
 
     def test_ipv6_lan_or_inventory_reports_unsupported_coverage_before_nmap(self):
         scopes = (
-            {'lan_cidr': 'fd00::/64', 'hosts': {'scanner': 'fd00::1'}},
-            {'lan_cidr': '172.31.250.0/29', 'hosts': {'scanner': 'fd00::1'}},
+            {'deep_exclusions': [], 'lan_cidr': 'fd00::/64', 'hosts': {'scanner': 'fd00::1'}},
+            {'deep_exclusions': [], 'lan_cidr': '172.31.250.0/29', 'hosts': {'scanner': 'fd00::1'}},
         )
         coverage = {'category': 'coverage', 'component': 'lan_discovery', 'error_type': 'UnsupportedAddressFamily'}
         with patch.object(scan, 'command', side_effect=AssertionError('nmap must not run')):

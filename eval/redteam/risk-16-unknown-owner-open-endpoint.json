@@ -1,0 +1,38 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.57",
+      "port": 9000,
+      "service": "admin",
+      "authentication": "unknown"
+    },
+    "E2": {
+      "category": "http_response",
+      "ip": "192.0.2.57",
+      "path": "/v1/models",
+      "status": 200,
+      "authenticated": false
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.57",
+      "owner": null,
+      "approved_ports": []
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E2"
+  ],
+  "reason": "An anonymous request succeeded, which proves exposure even with the owner unknown.",
+  "injection": false,
+  "tactic": "auth-bypass",
+  "lookup": {
+    "current": {
+      "192.0.2.57": [
+        9000
+      ]
+    }
+  }
+}

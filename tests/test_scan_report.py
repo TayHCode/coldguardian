@@ -1,12 +1,14 @@
 import contextlib
 from datetime import datetime, timezone
 import io
+import ipaddress
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 from coldguardian import cli, feeds, notify, report, scan, wizard
 from test_profiles import BASELINE, recorded
@@ -19,7 +21,7 @@ JSON_TYPES = {'object': dict, 'array': list, 'string': str, 'integer': int, 'boo
 
 def matches_contract(value, schema):
     if schema.keys() - {'$schema', 'title', 'const', 'enum', 'type', 'required', 'additionalProperties',
-                        'properties', 'items', 'oneOf', 'minimum', 'maximum', 'minLength', 'format'}:
+                        'properties', 'items', 'maxItems', 'oneOf', 'minimum', 'maximum', 'minLength', 'format'}:
         raise AssertionError(f'Update the scan contract test for {schema}')
     types = schema.get('type', [])
     if isinstance(types, str):
@@ -37,6 +39,8 @@ def matches_contract(value, schema):
         ):
             return False
         return all(matches_contract(value[key], fields[key]) for key in value.keys() & fields.keys())
+    if isinstance(value, list) and len(value) > schema.get('maxItems', len(value)):
+        return False
     if isinstance(value, list) and 'items' in schema:
         return all(matches_contract(item, schema['items']) for item in value)
     if type(value) is int:
@@ -57,6 +61,7 @@ class ScanReportTests(unittest.TestCase):
         self.config_path = self.root / 'config.json'
         self.properties = {
             'lan_cidr': '172.31.250.0/29',
+            'deep_exclusions': [],
             'hosts': {'scanner': '172.31.250.1', 'target': '172.31.250.2'},
             'output_dir': str(self.root),
         }
@@ -135,6 +140,99 @@ class ScanReportTests(unittest.TestCase):
                 self.assertEqual(result['findings'][0]['check'], 'scan_summary')
                 self.assertEqual(result['findings'][0]['host_count'], 2)
 
+    def test_prior_lan_baseline_cannot_expand_exact_host_targets(self):
+        self.configure({**BASELINE, '172.31.250.5': [22]})
+        self.properties['lan_cidr'] = '172.31.250.1/32'
+        self.configure(None)
+        for profile in ('quick', 'deep'):
+            with self.subTest(profile=profile):
+                self.calls.clear()
+                result = self.scan_json('incomplete' if profile == 'quick' else 'bad',
+                                        2 if profile == 'quick' else 1, profile)
+                self.assertIn('baseline_mismatch', {f['category'] for f in result['findings']})
+                self.assertEqual([args[1] for args, _ in self.calls], ['-sn', '-sT'])
+                for args, _ in self.calls:
+                    self.assertEqual(set(args[args.index('-oX') + 2:]), set(self.properties['hosts'].values()))
+
+    def test_deep_excluded_targets_receive_zero_probes(self):
+        scanner = self.properties['hosts']['scanner']
+        inventory = self.properties['hosts']['target']
+        saved, lan_only = '172.31.250.3', '172.31.250.4'
+        excluded = {inventory, saved, lan_only}
+        self.properties.update(deep_exclusions=sorted(excluded), ports='22')
+        self.configure({scanner: [], saved: []})
+        probes = []
+
+        def command(args, timeout, input=None):
+            targets = input.decode().splitlines() if input else args[args.index('-oX') + 2:]
+            addresses = {str(ip) for target in targets for ip in ipaddress.ip_network(target)}
+            probes.append((args[1], addresses))
+            root = ET.Element('nmaprun')
+            if scanner in addresses:
+                host = ET.SubElement(root, 'host')
+                ET.SubElement(host, 'status', state='up')
+                ET.SubElement(host, 'address', addrtype='ipv4', addr=scanner)
+                if args[1] == '-sT':
+                    ET.SubElement(ET.SubElement(host, 'ports'), 'extraports', count='1')
+            ET.SubElement(ET.SubElement(root, 'runstats'), 'finished', exit='success')
+            return ET.tostring(root)
+
+        result = self.scan_json('clean', 0, 'deep', command)
+        self.assertTrue(result['findings'][0]['network_complete'])
+        self.assertTrue(json.loads((self.root / 'state.json').read_text())['snapshot']['complete'])
+        self.assertEqual(set.union(*(ips for _, ips in probes)) & excluded, set())
+        self.assertIn(('-sT', {scanner}), probes)
+        self.assertEqual({f['ip'] for f in result['findings'] if f['check'] == 'deep_excluded'}, excluded)
+        self.assertIn('unprobed', (self.root / 'latest.md').read_text())
+
+    def test_all_excluded_scheduled_scan_sends_no_probes_and_records_incomplete(self):
+        ip = self.properties['hosts']['scanner']
+        self.properties.update(lan_cidr=ip + '/32', hosts={'scanner': ip}, deep_exclusions=[ip])
+        self.configure({ip: []})
+        with (patch.object(scan, 'command') as probe, contextlib.redirect_stdout(io.StringIO()),
+              contextlib.redirect_stderr(io.StringIO())):
+            cli.main(['--deep', '--config', str(self.config_path)])
+        probe.assert_not_called()
+        self.assertFalse(json.loads((self.root / 'state.json').read_text())['snapshot']['complete'])
+        self.assertIn('unprobed', (self.root / 'latest.md').read_text())
+
+    def test_deep_excludes_configured_dns_and_router_from_active_checks(self):
+        ip = self.properties['hosts']['target']
+        self.properties.update(deep_exclusions=[ip], dns_api={'provider': 'adguard', 'host': 'target'},
+                               upnp={'control_url': f'http://{ip}/control'})
+        self.configure(BASELINE)
+        with (patch('coldguardian.exposure.mapping_entry', return_value=None) as router,
+              patch('coldguardian.dnswatch.api_queries', return_value=([], {}, set())) as dns):
+            result = self.scan_json('incomplete', 2, 'deep', command=lambda *a, **kw: b'incomplete XML')
+        self.assertIn(('upnp', ip), {(f['check'], f.get('ip')) for f in result['findings']})
+        router.assert_not_called()
+        dns.assert_not_called()
+
+    def test_deep_fails_closed_without_a_readable_exclusion_list(self):
+        self.properties.pop('deep_exclusions')
+        for policy in ({}, {'deep_exclusions': None}, {'deep_exclusions': ['172.31.250.1', 'bad']},
+                       {'deep_exclusions': '172.31.250.1'}):
+            with self.subTest(policy=policy):
+                self.config_path.write_text(json.dumps(self.properties | policy))
+                self.calls.clear()
+                self.scan_json('incomplete', 2, 'deep')
+                self.assertEqual(self.calls, [])
+        self.calls.clear()
+        with patch.object(Path, 'read_text', side_effect=PermissionError):
+            self.scan_json('incomplete', 2, 'deep')
+        self.assertEqual(self.calls, [])
+        self.config_path.write_bytes(b'{"deep_exclusions": ["\xff"]}')
+        self.scan_json('incomplete', 2, 'deep')
+        self.assertEqual(self.calls, [])
+
+    def test_status_nested_json_returns_failed_outcome(self):
+        depth = 100_000
+        self.config_path.write_text(json.dumps(self.properties)[:-1] + ',"nested":' + '[' * depth + '0' + ']' * depth + '}')
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            code = cli.main(['status', '--json', '--config', str(self.config_path)])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(output.getvalue()), {'command': 'status', 'status': 'failed', 'exit_code': 2})
+
     def test_exact_host_scope_requires_its_address_in_the_inventory(self):
         self.properties['lan_cidr'] = '172.31.250.3/32'
         self.configure(None)
@@ -185,6 +283,47 @@ class ScanReportTests(unittest.TestCase):
             [(f['check'], f.get('ip')) for f in result['findings']],
             [('scan_summary', None), ('host_offline', missing)],
         )
+
+    def test_deep_discovers_approved_overlay_targets_from_metadata_only(self):
+        scanner, peer, absent = '172.31.250.1', '100.90.12.2', '100.90.12.9'
+        shared, provider = '100.90.12.4', '100.90.12.5'
+        wireguard, unrouted = '10.73.24.0/30', '10.73.25.0/30'
+        self.properties.update(hosts={'scanner': scanner}, ports='22',
+                               tailscale_peers=[peer, absent, shared, provider], wireguard_subnets=[wireguard, unrouted])
+        self.configure(None)
+        metadata = {('tailscale', 'status', '--json'): 'tailscale-status.json', ('ip', '-j', 'addr'): 'ip-addr.json'}
+        up = {scanner, peer, '10.73.24.2'}
+        probes = []
+
+        def command(args, timeout, input=None):
+            targets = input.decode().splitlines() if input else args[args.index('-oX') + 2:]
+            addresses = {str(ip) for target in targets for ip in ipaddress.ip_network(target)}
+            probes.append((args[1], addresses))
+            root = ET.Element('nmaprun')
+            for ip in sorted(addresses & up):
+                host = ET.SubElement(root, 'host')
+                ET.SubElement(host, 'status', state='up')
+                ET.SubElement(host, 'address', addrtype='ipv4', addr=ip)
+                if args[1] == '-sT':
+                    port = ET.SubElement(ET.SubElement(host, 'ports'), 'port', protocol='tcp', portid='22')
+                    ET.SubElement(port, 'state', state='open')
+            ET.SubElement(ET.SubElement(root, 'runstats'), 'finished', exit='success')
+            return ET.tostring(root)
+
+        with patch.object(wizard, 'command', side_effect=lambda args, _: (FIXTURES / metadata[tuple(args)]).read_bytes()):
+            result = self.scan_json('bad', 1, 'deep', command)
+        probed = set.union(*(ips for _, ips in probes))
+        lan = {str(ip) for ip in ipaddress.ip_network(self.properties['lan_cidr'])}
+        self.assertLessEqual(probed, lan | {peer, '10.73.24.1', '10.73.24.2'})
+        self.assertEqual(probed & {'100.90.12.3', shared, provider, absent, '10.73.24.3', '10.73.25.1'}, set())
+        self.assertIn(('-sT', up), probes)
+        gaps = {(f['check'], f.get('ip'), f.get('network')) for f in result['findings'] if f['category'] == 'coverage'}
+        self.assertEqual(gaps, {('host_offline', ip, None) for ip in (absent, shared, provider)}
+                         | {('wireguard_discovery', None, unrouted)})
+        self.assertEqual({f['ip'] for f in result['findings'] if f['check'] == 'service'}, up)
+        latest = (self.root / 'latest.md').read_text()
+        self.assertIn(f'Address {absent}.', latest)
+        self.assertIn(f'Range {unrouted}.', latest)
 
     def test_unexpected_scan_failure_returns_incomplete_json(self):
         self.configure(BASELINE)

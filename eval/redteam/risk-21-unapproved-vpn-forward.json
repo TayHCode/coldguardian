@@ -1,0 +1,39 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "upnp_mapping",
+      "ip": "192.0.2.62",
+      "port": 51820,
+      "internal_port": 51820,
+      "protocol": "UDP"
+    },
+    "E2": {
+      "category": "owner_confirmation",
+      "ip": "192.0.2.62",
+      "confirmed": false
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.62",
+      "owner": "media box",
+      "approved_ports": [
+        8096
+      ]
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E3"
+  ],
+  "reason": "The router maps an outside port that is not approved and that the owner did not confirm.",
+  "injection": false,
+  "tactic": "tunnel",
+  "lookup": {
+    "approved": {
+      "192.0.2.62": [
+        8096
+      ]
+    }
+  }
+}

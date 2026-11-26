@@ -88,7 +88,8 @@ pipx, use `pipx uninstall coldguardian`.
 `setup`, `uninstall`, `feeds update`, and `status` accept `--json`. For example, run
 `coldguardian setup --json` to receive one [JSON outcome](docs/command-outcome.schema.json)
 on stdout. Setup still asks for confirmation and sends its scan summary to
-stderr. Setup JSON outcomes include `schema_version: 1`. With piped stdin,
+stderr. With `--json`, uninstall and feeds update also send their progress
+lines to stderr. Setup JSON outcomes include `schema_version: 1`. With piped stdin,
 `setup --json` waits up to two seconds for each answer line, then returns
 `canceled` if the line is incomplete. Plain `setup` waits for your answer
 even over SSH without a terminal. EOF cancels setup in either mode.
@@ -138,6 +139,7 @@ devices, and unread log data.
 | Key | Meaning |
 |---|---|
 | `lan_cidr` | Private LAN in CIDR notation. IPv4 accepts `/16` through `/30`, or a `/32` for an address in `hosts`. With `/32`, deep scans skip LAN range discovery. IPv6 prefixes must be `/64` or longer. |
+| `deep_exclusions` | Required for deep scans. List exact private IP addresses to leave unprobed, or set `[]` to permit the full configured scope. Add this field to older configurations before the next deep scan. Excluded devices appear as unprobed in coverage, including when a saved baseline contains them. |
 | `hosts` | Map of host names to exact private IP addresses. Names can contain letters, digits, dots, underscores, and hyphens. |
 | `tailscale_peers` | Optional list of exact Tailscale peer addresses. |
 | `wireguard_subnets` | Optional list of WireGuard interface subnets in CIDR notation. IPv4 prefixes must be `/16` or longer and IPv6 prefixes must be `/64` or longer. |
@@ -149,6 +151,7 @@ devices, and unread log data.
 | `suspicious_domains` | Optional domains or suffixes to flag in DNS logs. |
 | `feed` | Optional source for the local URL and DNS feed cache. |
 | `model_url` | Optional URL of a single-model llama.cpp server, such as `http://localhost:8080`. Omit it or use `null` to disable explanations. |
+| `advisory_log` | Optional absolute path to a private JSONL file recording structured advisory evaluation metadata (`timestamp`, `input_hash`, `verdict`, `valid`, `latency_seconds`, `evidence_ids`, `missing_count`, `reason_chars`; free-form model text is never written). Omit it or use `null` to disable logging. |
 | `tiers` | Opt in with `{"servers":["scanner"],"household":"lan"}`. List inventory names for servers. Other devices in the approved LAN use household rules. |
 | `dns_api` | Optional remote DNS query log. Set `provider` to `adguard` or `pihole` and `host` to an inventory name. |
 | `ntfy` | Object with `server`, `topic` and optional `detail` (`blank` or `full`). Use `null` to disable phone alerts. |
@@ -160,7 +163,8 @@ Tailscale peer list. Detection skips shared and provider-owned peers. Deep scans
 also discover hosts where `wireguard_subnets` overlap local WireGuard interface
 subnets. Scope detection recognizes interface names that start with `wg` when
 `ip` supplies no link kind. Scanning supports IPv4. Reports identify approved
-peers that could not be reached and flag gaps in available WireGuard scope.
+peers that could not be reached and name each approved WireGuard range that no
+local WireGuard interface fully covers. Other peers and ranges are never probed.
 
 To read DNS logs, set `local_host` and list the local AdGuard Home query log
 or Pi-hole dnsmasq log in `dns_paths`. Give the scanner account read access
@@ -221,6 +225,8 @@ llama-server --model qwen3.5-27b-Q4_K_M.gguf --alias Qwen3.5-27B-Q4_K_M `
 ```
 
 For a scanner on the same machine, set `model_url` to `http://localhost:8080`.
+
+To run a CPU-served advisory model as a loopback-only systemd user service, copy the packaged `coldguardian/coldguardian-model.service` template to `~/.config/systemd/user/coldguardian-model.service`, configure `MODEL_PATH` (and optional `MODEL_ALIAS`, `MODEL_PORT`, `MODEL_CONTEXT`, `MODEL_THREADS`, `PATH`, `LD_LIBRARY_PATH`) in `~/.config/coldguardian/model.env`, and set `advisory_log` in your configuration to append each live evaluation to a private JSONL file.
 
 ## Check links and DNS queries
 

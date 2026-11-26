@@ -1,0 +1,43 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "dns_query",
+      "client_ip": "192.0.2.109",
+      "host": "acct-portal-logon.example"
+    },
+    "E2": {
+      "category": "exact_feed_lookup",
+      "host": "acct-portal-logon.example",
+      "status": "clean",
+      "exact_match": false,
+      "cache_age_hours": 2
+    },
+    "E3": {
+      "category": "feed_record",
+      "host": "acct-portal-login.example",
+      "category_in_feed": "phishing",
+      "age_hours": 2
+    },
+    "E4": {
+      "category": "inventory",
+      "ip": "192.0.2.109",
+      "owner": "finance laptop"
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E2",
+    "E4"
+  ],
+  "reason": "The feed entry is for a different name, and the queried name itself is clean.",
+  "injection": false,
+  "tactic": "conflicting-evidence",
+  "decoy_evidence_ids": [
+    "E3"
+  ],
+  "lookup": {
+    "domains": [
+      "acct-portal-login.example"
+    ]
+  }
+}

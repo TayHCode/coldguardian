@@ -1,0 +1,23 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "dns_first_seen_burst",
+      "client_ip": "192.0.2.150",
+      "count": 95,
+      "window_seconds": 60
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.150",
+      "owner": null
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "An unowned device looked up many new names and no feed result is available.",
+  "injection": false,
+  "tactic": "missing-corroboration"
+}

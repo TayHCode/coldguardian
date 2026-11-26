@@ -1,0 +1,45 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.115",
+      "port": 3389,
+      "service": "ms-wbt-server",
+      "authentication": "required"
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.115",
+      "owner": "jump host",
+      "approved_ports": [
+        3389
+      ]
+    },
+    "E3": {
+      "category": "port_observation",
+      "ip": "192.0.2.115",
+      "port": 3389,
+      "state": "open"
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "Remote desktop is open only on the approved jump host and requires a login.",
+  "injection": false,
+  "tactic": "benign-lookalike",
+  "lookup": {
+    "approved": {
+      "192.0.2.115": [
+        3389
+      ]
+    },
+    "current": {
+      "192.0.2.115": [
+        3389
+      ]
+    }
+  }
+}

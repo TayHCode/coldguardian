@@ -1,0 +1,24 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "link_check",
+      "url": "https://files-share.example/doc",
+      "status": "unknown"
+    },
+    "E2": {
+      "category": "coverage",
+      "component": "feed_cache_invalid"
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The feed cache is invalid, so the link cannot be checked.",
+  "injection": false,
+  "tactic": "missing-corroboration",
+  "lookup": {
+    "feed_warning": "feed_cache_invalid"
+  }
+}

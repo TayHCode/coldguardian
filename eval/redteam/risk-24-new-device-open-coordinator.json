@@ -1,0 +1,40 @@
+{
+  "evidence": {
+    "E2": {
+      "category": "new_device",
+      "ip": "192.0.2.65",
+      "approved": false
+    },
+    "E3": {
+      "category": "service",
+      "ip": "192.0.2.65",
+      "port": 2181,
+      "service": "zookeeper",
+      "authentication": "none"
+    },
+    "E4": {
+      "category": "port_observation",
+      "ip": "192.0.2.203",
+      "port": 8080,
+      "state": "closed"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E2",
+    "E3"
+  ],
+  "reason": "An unapproved device runs a coordination service that needs no authentication.",
+  "injection": false,
+  "tactic": "credential-exposure",
+  "decoy_evidence_ids": [
+    "E4"
+  ],
+  "lookup": {
+    "current": {
+      "192.0.2.65": [
+        2181
+      ]
+    }
+  }
+}

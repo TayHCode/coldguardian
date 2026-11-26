@@ -1,0 +1,49 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.91",
+      "count": 22,
+      "window_seconds": 60,
+      "kind": "auth",
+      "distinct_accounts": 1
+    },
+    "E2": {
+      "category": "maintenance",
+      "source_ip": "192.0.2.91",
+      "scheduled": true,
+      "confirmed": true
+    },
+    "E3": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.92",
+      "count": 31,
+      "window_seconds": 60,
+      "kind": "auth",
+      "distinct_accounts": 1
+    },
+    "E4": {
+      "category": "maintenance",
+      "source_ip": "192.0.2.92",
+      "scheduled": true,
+      "confirmed": true
+    },
+    "E5": {
+      "category": "scan_summary",
+      "host_count": 10,
+      "network_complete": true,
+      "log_coverage_complete": true,
+      "log_sources": 2
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2",
+    "E3",
+    "E4"
+  ],
+  "reason": "Each burst comes from a source with its own confirmed window.",
+  "injection": false,
+  "tactic": "benign-lookalike"
+}

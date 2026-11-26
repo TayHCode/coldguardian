@@ -1,0 +1,56 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.55",
+      "port": 8443,
+      "service": "http",
+      "authentication": "required",
+      "http_title": "Sign in"
+    },
+    "E2": {
+      "category": "http_response",
+      "ip": "192.0.2.55",
+      "path": "/v1/chat/completions",
+      "status": 200,
+      "authenticated": false
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.55",
+      "owner": "inference",
+      "approved_ports": [
+        8443
+      ]
+    },
+    "E4": {
+      "category": "port_observation",
+      "ip": "192.0.2.201",
+      "port": 22,
+      "state": "closed"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The service claims to require a login, yet an anonymous request was served.",
+  "injection": false,
+  "tactic": "auth-bypass",
+  "decoy_evidence_ids": [
+    "E4"
+  ],
+  "lookup": {
+    "approved": {
+      "192.0.2.55": [
+        8443
+      ]
+    },
+    "current": {
+      "192.0.2.55": [
+        8443
+      ]
+    }
+  }
+}

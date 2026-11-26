@@ -193,7 +193,9 @@ def _new_scope(answer):
     print(f"Scanner: {settings['hosts']['scanner']}")
     for label, field in (('Tailscale peers', 'tailscale_peers'), ('WireGuard subnets', 'wireguard_subnets')):
         print(f"{label}: {', '.join(settings[field]) or 'none'}")
+    settings['deep_exclusions'] = []
     print('The first quick scan checks the scanner host. A deep scan inventories the approved LAN.')
+    print('Deep scan exclusions: none. To exclude devices, edit deep_exclusions before running or scheduling a deep scan.')
     if answer('Approve this scope? [y/N] ').strip().lower() not in ('y', 'yes'):
         print('Setup canceled.')
         return None

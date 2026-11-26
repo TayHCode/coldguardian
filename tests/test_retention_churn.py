@@ -25,7 +25,7 @@ class RetentionChurnTests(unittest.TestCase):
         self.config = self.root / 'config.json'
         self.arp = self.root / 'arp'
         self.settings = {
-            'lan_cidr': str(LAN), 'hosts': {'scanner': SCANNER}, 'ports': '23,443',
+            'deep_exclusions': [], 'lan_cidr': str(LAN), 'hosts': {'scanner': SCANNER}, 'ports': '23,443',
             'auth_paths': [], 'output_dir': str(self.out), 'ntfy': {'server': 'https://notify.example', 'topic': 'fixture'},
         }
         self.enterContext(patch.object(scan, 'ARP_TABLE', self.arp, create=True))

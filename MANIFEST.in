@@ -1,0 +1,2 @@
+prune training
+exclude tests/test_training.py

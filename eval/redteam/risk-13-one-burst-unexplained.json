@@ -1,0 +1,44 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.53",
+      "count": 60,
+      "window_seconds": 60,
+      "kind": "auth",
+      "distinct_accounts": 1
+    },
+    "E2": {
+      "category": "maintenance",
+      "source_ip": "192.0.2.53",
+      "scheduled": true,
+      "confirmed": true
+    },
+    "E3": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.54",
+      "count": 75,
+      "window_seconds": 60,
+      "kind": "auth",
+      "distinct_accounts": 8
+    },
+    "E4": {
+      "category": "maintenance",
+      "source_ip": "192.0.2.54",
+      "scheduled": false,
+      "confirmed": false
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E3",
+    "E4"
+  ],
+  "reason": "The second client failed logins for eight accounts outside any window.",
+  "injection": false,
+  "tactic": "fake-maintenance",
+  "decoy_evidence_ids": [
+    "E1",
+    "E2"
+  ]
+}

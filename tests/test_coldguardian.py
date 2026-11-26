@@ -28,7 +28,7 @@ def tearDownModule():
 
 
 def settings(directory='/tmp/coldguardian-test'):
-    return n.config({'lan_cidr': '10.20.30.0/24', 'hosts': {'a-server': '10.20.29.1', 'dns-a': '10.20.29.2'}, 'local_host': 'a-server', 'ports': '22,80', 'output_dir': directory})
+    return n.config({'deep_exclusions': [], 'lan_cidr': '10.20.30.0/24', 'hosts': {'a-server': '10.20.29.1', 'dns-a': '10.20.29.2'}, 'local_host': 'a-server', 'ports': '22,80', 'output_dir': directory})
 
 
 def xml(hosts, ports=True):

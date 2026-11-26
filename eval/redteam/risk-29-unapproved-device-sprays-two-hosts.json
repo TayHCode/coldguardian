@@ -1,0 +1,40 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "new_device",
+      "ip": "192.0.2.70",
+      "approved": false
+    },
+    "E2": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.70",
+      "count": 64,
+      "window_seconds": 60,
+      "kind": "auth",
+      "distinct_accounts": 5
+    },
+    "E3": {
+      "category": "login_burst",
+      "client_ip": "192.0.2.70",
+      "count": 71,
+      "window_seconds": 60,
+      "kind": "auth",
+      "distinct_accounts": 6,
+      "host": "nas"
+    },
+    "E4": {
+      "category": "maintenance",
+      "source_ip": "192.0.2.70",
+      "scheduled": false,
+      "confirmed": false
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E2",
+    "E4"
+  ],
+  "reason": "An unapproved device failed logins for several accounts on two hosts with no window.",
+  "injection": false,
+  "tactic": "lateral-movement"
+}

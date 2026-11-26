@@ -196,7 +196,7 @@ def cached_feed_domains(c):
     return domains, warning
 
 
-def collect(c, checkpoints, cached_domains=None):
+def collect(c, checkpoints, cached_domains=None, *, excluded=()):
     host = c['local_host']
     pending = {key: value for key, value in checkpoints.items() if key.split(':', 2)[:2] == [host, 'auth']}
     findings = []
@@ -208,7 +208,11 @@ def collect(c, checkpoints, cached_domains=None):
         source = c['dns_api']
         address = c['hosts'][source['host']]
         key = f"dns:{source['provider']}:{address}:{source.get('port', 443)}"
-        rows, pending[key], issues = dnswatch.api_queries(source, address, checkpoints.get(key, {}), int(time.time()))
+        previous = checkpoints.get(key, {})
+        if address in excluded:
+            rows, pending[key], issues = [], previous, {'deep_excluded'}
+        else:
+            rows, pending[key], issues = dnswatch.api_queries(source, address, previous, int(time.time()))
         observations.extend(rows)
         counts = collections.Counter()
         for _, client, domain in rows:
@@ -255,7 +259,7 @@ def collect(c, checkpoints, cached_domains=None):
     return pending, findings
 
 
-def explain_finding(url, key, item, lookup=None):
+def explain_finding(url, key, item, lookup=None, *, advisory_log=None):
     if url is None or item['category'] in (
         'source_summary', 'scan_summary', 'baseline_approved', 'baseline_enrolled', 'service',
     ):
@@ -267,7 +271,7 @@ def explain_finding(url, key, item, lookup=None):
     previous_handler = signal.signal(signal.SIGALRM, timed_out)
     previous_timer = signal.setitimer(signal.ITIMER_REAL, model.TIMEOUT)
     try:
-        return model.explain(url, {key: item}, lookup=lookup)
+        return model.explain(url, {key: item}, lookup=lookup, advisory_log=advisory_log)
     except OSError:
         return None
     finally:
@@ -387,7 +391,8 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
         snapshot, scan_findings = scan(c, profile, approved_hosts, top_ports, observed_peers=peers or ())
         macs = lan_macs(snapshot, c['_lan']) if snapshot else {}
         findings.extend(scan_findings)
-        network_complete = not any(f['category'] == 'coverage' and f.get('component') != 'host_offline' for f in scan_findings)
+        network_complete = not any(f['category'] == 'coverage' and f.get('component') != 'host_offline'
+                                   and not f.get('optional') for f in scan_findings)
         if baseline_error:
             findings.append(finding('coverage', component='baseline_read'))
         elif baseline is None:
@@ -405,14 +410,15 @@ def run(c, approve=False, profile='deep', top_ports=None, *, confirm_baseline=No
             risky_ips = {f['ip'] for f in scan_findings if f['category'] == 'risky_service'}
             findings.extend(compare_devices(snapshot, approved, macs, risky_ips, compare_missing_ports=top_ports is None))
         findings.extend(peer_findings)
-        exposure_findings, exposure_status = exposure.collect(c)
+        excluded = c.get('deep_exclusions', ()) if profile == 'deep' else ()
+        exposure_findings, exposure_status = exposure.collect(c, excluded=excluded)
         findings.extend(exposure_findings)
         network_complete = network_complete and 'incomplete' not in exposure_status.values()
         if c.get('host_watch'):
             host_findings, hashes, watch_status = hostwatch.collect(c, approved)
             findings.extend(host_findings)
         cached_domains = cached_feed_domains(c)
-        checkpoints, log_findings = collect(c, state.get('checkpoints', {}), cached_domains)
+        checkpoints, log_findings = collect(c, state.get('checkpoints', {}), cached_domains, excluded=excluded)
         findings.extend(log_findings)
         findings.insert(0, finding('scan_summary', host_count=len(snapshot), network_complete=network_complete, log_sources=sum(f['category'] == 'source_summary' for f in log_findings), log_coverage_complete=not any(f['category'] == 'coverage' for f in log_findings)))
         gaps = {f.get('component') for f in findings if f['category'] == 'coverage' and not f.get('optional')}
@@ -535,7 +541,7 @@ def explain_saved_finding(c, finding_id):
             approved = baseline.get('hosts', {}) if baseline.get('fingerprint') == c['_fingerprint'] else {}
             lookup = LookupContext(c, approved, state.get('previous_hosts', {}), snapshot['hosts'],
                                    row['findings'], *cached_feed_domains(c))
-    explanation = explain_finding(c['model_url'], key, item, lookup)
+    explanation = explain_finding(c['model_url'], key, item, lookup, advisory_log=c.get('advisory_log'))
     if explanation is None:
         raise ValueError('Local model explanation is unavailable for this finding.')
     code = scan_document([item], None, c['level'])['exit_code']
@@ -630,7 +636,7 @@ def status_command(args):
         if not isinstance(settings, dict):
             raise ValueError('configuration must be an object')
         c = config(settings)
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, RecursionError):
         code, status = 2, 'failed'
         print('Could not read or validate the Coldguardian configuration.', file=sys.stderr)
     else:

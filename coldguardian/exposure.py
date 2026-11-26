@@ -130,10 +130,14 @@ def funnel_endpoints(c):
             yield finding('tailscale_funnel', node=node.lower(), port=port)
 
 
-def collect(c):
+def collect(c, *, excluded=()):
     findings, results = [], {}
     for source, read in (('upnp', router_mappings), ('tailscale_funnel', funnel_endpoints)):
         if not c.get(source):
+            continue
+        if source == 'upnp' and c['_upnp_endpoint'][0].hostname in excluded:
+            results[source] = 'incomplete'
+            findings.append(finding('coverage', component=source, ip=c['_upnp_endpoint'][0].hostname))
             continue
         state = 'clear'
         try:

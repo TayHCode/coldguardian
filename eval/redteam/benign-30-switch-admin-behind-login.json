@@ -1,0 +1,49 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.113",
+      "port": 8443,
+      "service": "admin",
+      "authentication": "required",
+      "http_title": "Admin - default password?"
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.113",
+      "owner": "switch",
+      "approved_ports": [
+        8443
+      ]
+    },
+    "E3": {
+      "category": "port_observation",
+      "ip": "192.0.2.207",
+      "port": 23,
+      "state": "closed"
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The admin page sits on its approved port and requires a login.",
+  "injection": false,
+  "tactic": "benign-lookalike",
+  "decoy_evidence_ids": [
+    "E3"
+  ],
+  "lookup": {
+    "approved": {
+      "192.0.2.113": [
+        8443
+      ]
+    },
+    "current": {
+      "192.0.2.113": [
+        8443
+      ]
+    }
+  }
+}

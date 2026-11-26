@@ -1,5 +1,6 @@
 from collections import deque
 import datetime
+import ipaddress
 import json
 import os
 import re
@@ -146,6 +147,7 @@ COVERAGE_MESSAGES = {
     **{k: v['incomplete'] for k, v in exposure.STATUS.items()},
     'lan_discovery': 'Local network discovery failed. Next step: check scanner access and retry.',
     'host_discovery': 'Inventory discovery failed. Next step: check network connectivity to the inventory hosts and retry.',
+    'deep_excluded': 'Excluded from deep scans by configuration. This device was left unprobed.',
     'host_offline': 'An inventory device did not respond. Next step: check whether it is powered on and connected.',
     'tcp_scan': 'The port scan did not finish. Next step: check scanner access and retry.',
     'tailscale_status': 'The Tailscale peer list could not be read. The previous list was retained.',
@@ -218,6 +220,11 @@ def safe_finding(f):
             result[key] = valid_ip(f[key])
     if isinstance(f.get('host'), str) and HOST_NAME.fullmatch(f['host']):
         result['host'] = f['host']
+    if f.get('component') == 'wireguard_discovery' and isinstance(f.get('network'), str):
+        try:
+            result['network'] = str(ipaddress.ip_network(f['network']))
+        except ValueError:
+            pass
     if f.get('optional') is True:
         result['optional'] = True
     if f.get('kind') in ('dns', 'auth'):
@@ -387,7 +394,7 @@ def report_text(findings, explanations, stamp, *, scanner_peak_rss_kib=None):
                 line += ' Next step: ' + ('review expected sign-in failures.' if category == 'auth_failed' else 'review expected device or application activity.')
         elif category == 'coverage':
             section = coverage
-            location = ('Source' + source + '. ') if source else (f'Address {address}. ' if 'ip' in f else '')
+            location = ('Source' + source + '. ') if source else (f'Address {address}. ' if 'ip' in f else f'Range {f["network"]}. ' if 'network' in f else '')
             line = location + COVERAGE_MESSAGES.get(f.get('component'), 'A monitoring check is incomplete. Next step: review local monitoring configuration.') + ((' Unparsed rows: ' + count + '.') if f.get('component') == 'dns_parse' else '')
         elif category == 'baseline_missing':
             line = 'No approved network reference exists. Next step: review the observed inventory and explicitly approve a reference.'

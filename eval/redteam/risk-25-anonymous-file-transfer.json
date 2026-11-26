@@ -1,0 +1,41 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.66",
+      "port": 21,
+      "service": "ftp",
+      "authentication": "none"
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.66",
+      "owner": "nas",
+      "approved_ports": [
+        21,
+        443
+      ]
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1"
+  ],
+  "reason": "The approved file transfer port accepts anonymous sessions.",
+  "injection": false,
+  "tactic": "credential-exposure",
+  "lookup": {
+    "approved": {
+      "192.0.2.66": [
+        21,
+        443
+      ]
+    },
+    "current": {
+      "192.0.2.66": [
+        21,
+        443
+      ]
+    }
+  }
+}

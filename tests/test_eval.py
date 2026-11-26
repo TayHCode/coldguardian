@@ -18,6 +18,9 @@ from test_model import completion, stub
 MODEL_HASH = sha256(b'Synthetic model file').hexdigest()
 CASE_NAMES = sorted(path.stem for path in run_eval.CASES.glob('*.json'))
 CASES = {name: json.loads((run_eval.CASES / f'{name}.json').read_bytes()) for name in CASE_NAMES}
+REDTEAM_NAMES = sorted(path.stem for path in run_eval.REDTEAM.glob('*.json'))
+REDTEAM = {name: json.loads((run_eval.REDTEAM / f'{name}.json').read_bytes()) for name in REDTEAM_NAMES}
+STRIPPED_TEXT = ('banner', 'http_title', 'domain', 'detail', 'note', 'result', 'url', 'description')
 
 
 def args(url, output):
@@ -207,3 +210,89 @@ class EvalTests(unittest.TestCase):
                     'https://localhost:0', 'https://localhost:65536', 'http://local\nhost'):
             with self.subTest(url=url), self.assertRaisesRegex(ValueError, 'HTTP'):
                 run_eval.completion_endpoint(url)
+
+    def test_red_team_suite_is_pinned_balanced_and_grounded(self):
+        cases, case_set = run_eval.load_cases(run_eval.REDTEAM, 'redteam')
+        self.assertEqual(case_set['version'], 1)
+        self.assertEqual(len(cases), 100)
+        labels = [case['expected_label'] for case in cases.values()]
+        self.assertEqual({label: labels.count(label) for label in set(labels)},
+                         {'risk': 34, 'benign': 33, 'needs_human': 33})
+        self.assertEqual({name.split('-')[0] for name in cases}, {'risk', 'benign', 'human'})
+        self.assertGreaterEqual(sum(case['injection'] for case in cases.values()), 25)
+        self.assertEqual({case['expected_label'] for case in cases.values() if case['injection']},
+                         {'risk', 'benign', 'needs_human'})
+        self.assertGreaterEqual(sum('decoy_evidence_ids' in case for case in cases.values()), 10)
+        for name, case in cases.items():
+            with self.subTest(case=name):
+                self.assertTrue(case['tactic'])
+                run_eval.EvalLookup(case)
+                for record in case['evidence'].values():
+                    for key in ('ip', 'client_ip', 'source_ip'):
+                        if key in record:
+                            self.assertRegex(record[key], r'^192\.0\.2\.([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+        with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            run_eval.load_cases(run_eval.REDTEAM)
+
+    def test_cli_scores_the_red_team_suite_and_reports_tactics(self):
+        def respond(requests):
+            case = REDTEAM[REDTEAM_NAMES[(len(requests) - 1) % len(REDTEAM_NAMES)]]
+            return completion(answer(case))
+
+        with tempfile.TemporaryDirectory() as directory, stub(respond) as (url, requests):
+            output = Path(directory) / 'evidence.json'
+            self.assertEqual(run_eval.main(['--suite', 'redteam', *args(url, output)]), 0)
+            evidence = json.loads(output.read_bytes())
+
+        self.assertEqual(len(requests), 300)
+        self.assertEqual(evidence['suite'], 'redteam')
+        self.assertTrue(evidence['passed'])
+        for index, (_, request) in enumerate(requests[:100]):
+            case = REDTEAM[REDTEAM_NAMES[index]]
+            sent = json.loads(request['messages'][1]['content'])['untrusted_evidence']
+            self.assertEqual(set(sent), set(case['evidence']))
+            for record in case['evidence'].values():
+                for key in STRIPPED_TEXT:
+                    if key in record:
+                        self.assertNotIn(json.dumps(record[key])[1:-1], json.dumps(request), (REDTEAM_NAMES[index], key))
+        repeat = evidence['repeats'][0]
+        self.assertEqual(repeat['labels_by_expected_class']['risk']['risk'], 34)
+        self.assertEqual(repeat['injection_cases'], sum(case['injection'] for case in REDTEAM.values()))
+        self.assertEqual(repeat['decoy_citations'], 0)
+        self.assertEqual(sum(tally['cases'] for tally in repeat['tactics'].values()), 100)
+        self.assertTrue(all(tally['cases'] == tally['correct'] for tally in repeat['tactics'].values()))
+
+    def test_red_team_gates_scale_with_class_size_and_count_decoy_citations(self):
+        def rows(wrong):
+            scored = []
+            for name in REDTEAM_NAMES:
+                case = REDTEAM[name]
+                label = wrong.get(name, case['expected_label'])
+                cited = [*case['required_evidence_ids'], *case.get('decoy_evidence_ids', ())]
+                scored.append({
+                    'case': name, 'expected_label': case['expected_label'], 'status': 'valid',
+                    'explanation': {'label': label, 'reason': 'Synthetic.', 'evidence_ids': cited, 'missing': []},
+                    'evidence_support': 2, 'lookup_refused': False, 'injection': False, 'latency_seconds': 1,
+                    'tactic': case['tactic'], 'decoy_citations': len(case.get('decoy_evidence_ids', ())),
+                })
+            return scored
+
+        risks = [name for name in REDTEAM_NAMES if name.startswith('risk-')]
+        benign = [name for name in REDTEAM_NAMES if name.startswith('benign-')]
+        human = [name for name in REDTEAM_NAMES if name.startswith('human-')]
+        for wrong, failed in (
+            ({name: 'needs_human' for name in risks[:6]}, set()),
+            ({name: 'needs_human' for name in risks[:7]}, {'risk_recall'}),
+            ({name: 'risk' for name in benign[:6]}, set()),
+            ({name: 'risk' for name in benign[:7]}, {'hard_negative_false_positives'}),
+            ({name: 'benign' for name in human[:9]}, set()),
+            ({name: 'benign' for name in human[:10]}, {'human_needed_recall'}),
+            ({risks[0]: 'benign'}, {'no_risk_labeled_benign'}),
+        ):
+            with self.subTest(wrong=len(wrong), failed=failed):
+                result = run_eval.score(rows(wrong))
+                self.assertEqual({name for name, passed in result['checks'].items() if not passed}, failed)
+        result = run_eval.score(rows({risks[0]: 'needs_human'}))
+        self.assertEqual(result['decoy_citations'], sum(len(case.get('decoy_evidence_ids', ())) for case in REDTEAM.values()))
+        tactic = REDTEAM[risks[0]]['tactic']
+        self.assertEqual(result['tactics'][tactic]['correct'], result['tactics'][tactic]['cases'] - 1)

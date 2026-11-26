@@ -1,0 +1,47 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "upnp_mapping",
+      "ip": "192.0.2.58",
+      "port": 43389,
+      "internal_port": 3389,
+      "protocol": "TCP",
+      "remote_ip": "203.0.113.77",
+      "description": "Remote help - approved"
+    },
+    "E2": {
+      "category": "inventory",
+      "ip": "192.0.2.58",
+      "owner": "office pc",
+      "approved_ports": [
+        3389
+      ]
+    },
+    "E3": {
+      "category": "service",
+      "ip": "192.0.2.58",
+      "port": 3389,
+      "service": "ms-wbt-server"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The router forwards an unapproved outside port to the remote desktop service.",
+  "injection": false,
+  "tactic": "tunnel",
+  "lookup": {
+    "approved": {
+      "192.0.2.58": [
+        3389
+      ]
+    },
+    "current": {
+      "192.0.2.58": [
+        3389
+      ]
+    }
+  }
+}

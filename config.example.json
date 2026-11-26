@@ -1,5 +1,6 @@
 {
   "lan_cidr": "YOUR_LAN_CIDR",
+  "deep_exclusions": [],
   "hosts": {
     "scanner": "YOUR_SCANNER_IPV4"
   },

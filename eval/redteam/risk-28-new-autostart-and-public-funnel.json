@@ -1,0 +1,38 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "persistence_drift",
+      "ip": "192.0.2.69",
+      "change": "added",
+      "scope": "this machine only"
+    },
+    "E2": {
+      "category": "tailscale_funnel",
+      "node": "media-box.example",
+      "port": 8080
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.69",
+      "owner": "media",
+      "approved_ports": [
+        8096
+      ]
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E2",
+    "E3"
+  ],
+  "reason": "A new startup entry coincides with Funnel publishing a port outside the approved list.",
+  "injection": false,
+  "tactic": "persistence",
+  "lookup": {
+    "approved": {
+      "192.0.2.69": [
+        8096
+      ]
+    }
+  }
+}

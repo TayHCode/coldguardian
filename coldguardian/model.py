@@ -1,12 +1,21 @@
+from datetime import datetime, timezone
+import hashlib
 import http.client
 import ipaddress
 import json
+import logging
+import os
+from pathlib import Path
 import socket
 import signal
+import stat
 import time
 from urllib.parse import urlsplit
 
 from .scope import private_address
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 CHAT_PATH = '/v1/chat/completions'
@@ -118,9 +127,95 @@ def chat(target, payload, *, path=CHAT_PATH, timeout=TIMEOUT):
     return message, choice['finish_reason']
 
 
-def explain(url, evidence, lookup=None):
+def _open_advisory_parent(parent):
+    if not parent.is_absolute():
+        raise ValueError('advisory_log must be an absolute path')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parent.parts[1:]:
+            if part in ('', '.', '..'):
+                raise ValueError('advisory_log path must not contain relative segments')
+            try:
+                next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def append_advisory_log(path, evidence, explanation, latency_seconds, *, model_id=None, status=None):
+    from .report import model_observation
+
+    observations = {key: model_observation(item) for key, item in evidence.items()}
+    digest = hashlib.sha256(
+        json.dumps(observations, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    ).hexdigest()
+    verdict = status if status is not None else (explanation['label'] if explanation is not None else 'invalid')
+    row = {
+        'timestamp': datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z'),
+        'input_hash': digest,
+        'verdict': verdict,
+        'valid': explanation is not None,
+        'latency_seconds': round(float(latency_seconds), 4),
+    }
+    if model_id is not None:
+        row['model'] = model_id
+    if explanation is not None:
+        row['evidence_ids'] = explanation['evidence_ids']
+        row['missing_count'] = len(explanation['missing'])
+        row['reason_chars'] = len(explanation['reason'])
+    target = Path(path)
+    if target.name in ('', '.', '..'):
+        raise ValueError('advisory_log must name a regular file')
+    parent_fd = _open_advisory_parent(target.parent)
+    try:
+        fd = os.open(
+            target.name,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+            dir_fd=parent_fd,
+        )
+    finally:
+        os.close(parent_fd)
+    with os.fdopen(fd, 'a', encoding='utf-8') as log:
+        if not stat.S_ISREG(os.fstat(log.fileno()).st_mode):
+            raise ValueError('advisory_log must be a regular file')
+        os.fchmod(log.fileno(), 0o600)
+        log.write(json.dumps(row, sort_keys=True) + '\n')
+        log.flush()
+        os.fsync(log.fileno())
+    return row
+
+
+def _record_advisory_log(path, evidence, explanation, latency_seconds, *, model_id=None, status=None):
+    try:
+        append_advisory_log(path, evidence, explanation, latency_seconds, model_id=model_id, status=status)
+    except (OSError, ValueError) as error:
+        LOGGER.warning('Advisory log write failed: %s', error)
+
+
+def explain(url, evidence, lookup=None, *, advisory_log=None, model_id=None, seed=None):
     target = endpoint(url)
-    return explain_with(lambda body: chat(target, body), evidence, lookup)
+    start = time.perf_counter()
+    try:
+        result = explain_with(lambda body: chat(target, body), evidence, lookup, model_id=model_id, seed=seed)
+    except OSError:
+        if advisory_log is not None:
+            _record_advisory_log(
+                advisory_log, evidence, None, time.perf_counter() - start, model_id=model_id, status='error'
+            )
+        raise
+    if advisory_log is not None:
+        _record_advisory_log(advisory_log, evidence, result, time.perf_counter() - start, model_id=model_id)
+    return result
 
 
 def explain_with(send, evidence, lookup=None, *, model_id=None, seed=None):

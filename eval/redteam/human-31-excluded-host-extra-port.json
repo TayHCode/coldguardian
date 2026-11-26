@@ -1,0 +1,47 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "coverage",
+      "ip": "192.0.2.152",
+      "component": "deep_excluded",
+      "optional": true
+    },
+    "E2": {
+      "category": "observed_host",
+      "ip": "192.0.2.152",
+      "ports": [
+        22,
+        8080
+      ]
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.152",
+      "owner": "lab switch",
+      "approved_ports": [
+        22
+      ]
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E2",
+    "E3"
+  ],
+  "reason": "An unapproved port is open on a host that deep scans are told to skip.",
+  "injection": false,
+  "tactic": "missing-corroboration",
+  "lookup": {
+    "approved": {
+      "192.0.2.152": [
+        22
+      ]
+    },
+    "current": {
+      "192.0.2.152": [
+        22,
+        8080
+      ]
+    }
+  }
+}

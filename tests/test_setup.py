@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from coldguardian import cli, notify, wizard
+from test_scan_report import SCHEMA, matches_contract
 
 
 SCOPE = {
@@ -24,6 +26,7 @@ SCOPE = {
 }
 NMAP_HOST = '<status state="up"/><address addr="10.20.30.2" addrtype="ipv4"/>'
 NMAP_DONE = '<runstats><finished exit="success"/></runstats></nmaprun>'
+OUTCOME_SCHEMA = json.loads(SCHEMA.with_name('command-outcome.schema.json').read_text())
 
 
 class SetupTest(unittest.TestCase):
@@ -36,14 +39,14 @@ class SetupTest(unittest.TestCase):
         self.enterContext(patch('sys.stdin', io.StringIO()))
         self.output = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
 
-    def scan_with(self, *answers):
+    def scan_with(self, *answers, args=('setup',)):
         discovery = '<nmaprun><host>' + NMAP_HOST + '</host>' + NMAP_DONE
         ports = '<ports><extraports count="65534"/><port protocol="tcp" portid="22"><state state="open"/></port></ports>'
         scan = '<nmaprun><host>' + NMAP_HOST + ports + '</host>' + NMAP_DONE
         with (patch('builtins.input', side_effect=answers) as prompts,
               patch('coldguardian.scan.command', side_effect=[discovery, scan]) as nmap,
               patch('urllib.request.OpenerDirector.open') as http):
-            result = cli.main(['setup'])
+            result = cli.main(list(args))
         http.assert_not_called()
         self.assertEqual(nmap.call_count, 2)
         self.assertEqual(prompts.call_count, len(answers))
@@ -133,8 +136,56 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(json.loads(self.output.getvalue()), {
             'schema_version': 1, 'command': 'setup', 'status': 'declined', 'exit_code': 0,
         })
+        self.assertTrue(matches_contract(json.loads(self.output.getvalue()), OUTCOME_SCHEMA))
         scan.assert_not_called()
         self.assertEqual(list(Path.home().iterdir()), [])
+
+    def test_setup_json_reports_ok_and_incomplete_with_scan_output_on_stderr(self):
+        for answers, code, status in ((('yes', 'low', 'none', 'none', 'no'), 2, 'incomplete'),
+                                      (('', 'yes'), 0, 'ok')):
+            with self.subTest(status=status), contextlib.redirect_stderr(io.StringIO()) as diagnostics:
+                self.output.seek(0)
+                self.output.truncate()
+                self.assertEqual(self.scan_with(*answers, args=('setup', '--json')), code)
+                outcome = json.loads(self.output.getvalue())
+                self.assertEqual(outcome, {'schema_version': 1, 'command': 'setup', 'status': status, 'exit_code': code})
+                self.assertTrue(matches_contract(outcome, OUTCOME_SCHEMA))
+                self.assertIn('10.20.30.2', diagnostics.getvalue())
+        self.assertTrue((wizard.setup_state() / 'baseline.json').is_file())
+
+    def uninstall_json(self, code, status):
+        self.output.seek(0)
+        self.output.truncate()
+        with contextlib.redirect_stderr(io.StringIO()) as diagnostics:
+            self.assertEqual(cli.main(['uninstall', '--json']), code)
+        outcome = json.loads(self.output.getvalue())
+        self.assertEqual(outcome, {'command': 'uninstall', 'status': status, 'exit_code': code})
+        self.assertTrue(matches_contract(outcome, OUTCOME_SCHEMA))
+        return diagnostics.getvalue()
+
+    def test_uninstall_json_reports_each_outcome_with_removals_on_stderr(self):
+        config, state = wizard.setup_config(), wizard.setup_state()
+        config.parent.mkdir(parents=True)
+        config.write_text('{}')
+        state.mkdir(parents=True)
+        with open(state / '.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertIn('active scan', self.uninstall_json(2, 'failed'))
+        self.assertTrue(config.exists())
+        with patch.object(wizard, 'uninstall', side_effect=KeyboardInterrupt):
+            self.assertIn('Canceled.', self.uninstall_json(2, 'canceled'))
+        diagnostics = self.uninstall_json(0, 'ok')
+        self.assertIn(f'Removed {state}', diagnostics)
+        self.assertIn(f'Removed {config}', diagnostics)
+        self.assertFalse(config.exists() or state.exists())
+        self.uninstall_json(0, 'ok')
+
+    def test_plain_uninstall_prints_removals_without_json(self):
+        config = wizard.setup_config()
+        config.parent.mkdir(parents=True)
+        config.write_text('{}')
+        self.assertEqual(cli.main(['uninstall']), 0)
+        self.assertEqual(self.output.getvalue(), f'Removed {config}\n')
 
     def test_declining_baseline_keeps_the_report_and_leaves_timers_off(self):
         with patch('coldguardian.timers._systemctl') as systemctl:
@@ -211,9 +262,11 @@ class SetupTest(unittest.TestCase):
                         self.assertEqual(process.wait(timeout=5), 2)
                     finally:
                         process.kill()
-                    self.assertEqual(json.load(process.stdout), {
+                    outcome = json.load(process.stdout)
+                    self.assertEqual(outcome, {
                         'schema_version': 1, 'command': 'setup', 'status': 'canceled', 'exit_code': 2,
                     })
+                    self.assertTrue(matches_contract(outcome, OUTCOME_SCHEMA))
                     self.assertIn('status --json', process.stderr.read())
         self.assertFalse(wizard.setup_state().exists())
 

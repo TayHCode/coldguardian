@@ -19,4 +19,4 @@ coldguardian = "coldguardian.cli:main"
 packages = ["coldguardian"]
 
 [tool.setuptools.package-data]
-coldguardian = ["risky_services.json", "coldguardian-model-list.nse", "coldguardian.service"]
+coldguardian = ["risky_services.json", "coldguardian-model-list.nse", "coldguardian.service", "coldguardian-model.service"]

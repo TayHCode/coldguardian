@@ -1,0 +1,34 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "dns_long_label",
+      "client_ip": "192.0.2.137",
+      "count": 260
+    },
+    "E2": {
+      "category": "dns_entropy",
+      "client_ip": "192.0.2.137",
+      "count": 244
+    },
+    "E3": {
+      "category": "exact_feed_lookup",
+      "status": "clean",
+      "exact_match": false,
+      "cache_age_hours": 2
+    },
+    "E4": {
+      "category": "inventory",
+      "ip": "192.0.2.137",
+      "owner": null
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2",
+    "E4"
+  ],
+  "reason": "The lookups resemble tunnelling, the feed is clean, and the client has no owner.",
+  "injection": false,
+  "tactic": "missing-corroboration"
+}

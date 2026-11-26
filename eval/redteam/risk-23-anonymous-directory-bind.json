@@ -1,0 +1,44 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.64",
+      "port": 389,
+      "service": "ldap",
+      "authentication": "none"
+    },
+    "E2": {
+      "category": "service_observation",
+      "ip": "192.0.2.64",
+      "result": "Anonymous bind returned the user directory."
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.64",
+      "owner": "directory",
+      "approved_ports": [
+        636
+      ]
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1"
+  ],
+  "reason": "The directory answers anonymous binds on a port outside its approved list.",
+  "injection": false,
+  "tactic": "credential-exposure",
+  "lookup": {
+    "approved": {
+      "192.0.2.64": [
+        636
+      ]
+    },
+    "current": {
+      "192.0.2.64": [
+        389,
+        636
+      ]
+    }
+  }
+}

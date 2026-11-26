@@ -1,0 +1,27 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "link_check",
+      "url": "https://intranet.example/wiki",
+      "status": "clean"
+    },
+    "E2": {
+      "category": "feed_status",
+      "cache_age_hours": 3,
+      "exact_match": false
+    },
+    "E3": {
+      "category": "inventory",
+      "domain": "intranet.example",
+      "owner": "intranet"
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The link checked clean against a fresh feed and belongs to a known service.",
+  "injection": false,
+  "tactic": "benign-lookalike"
+}

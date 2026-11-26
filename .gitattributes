@@ -1,1 +1,4 @@
 eval/cases/*.json text eol=lf
+eval/redteam/*.json text eol=lf
+training export-ignore
+tests/test_training.py export-ignore

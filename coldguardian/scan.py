@@ -56,7 +56,8 @@ def config(raw):
         raise ScopeError('IPv4 lan_cidr must have a prefix of /30 or shorter, or be an exact /32')
     c['lan_cidr'] = str(lan)
     c['_lan'] = lan
-    for field, parse in (('tailscale_peers', tailscale_address), ('wireguard_subnets', private_network)):
+    for field, parse in (('tailscale_peers', tailscale_address), ('wireguard_subnets', private_network),
+                         ('deep_exclusions', private_address)):
         if field in c:
             if not isinstance(c[field], list):
                 raise ScopeError(f'{field} must be a list')
@@ -111,6 +112,10 @@ def config(raw):
     c.setdefault('model_url', None)
     if c['model_url'] is not None:
         endpoint(c['model_url'])
+    c.setdefault('advisory_log', None)
+    if c['advisory_log'] is not None:
+        if not isinstance(c['advisory_log'], str) or not c['advisory_log'].startswith('/') or '\x00' in c['advisory_log']:
+            raise ValueError('advisory_log must be an absolute path')
     c.setdefault('local_host', None)
     c.setdefault('optional_hosts', [])
     c.setdefault('dns_paths', [])
@@ -130,7 +135,7 @@ def config(raw):
     if c.get('ntfy') is not None:
         c['ntfy'] = validate_ntfy(c['ntfy'])
     public = {k: v for k, v in c.items() if not k.startswith('_') and k not in
-              ('host_watch', 'feed', 'tiers', 'dns_api', 'upnp', 'tailscale_funnel', 'level', 'model_url', 'ntfy', 'report_max_age_days', 'report_max_count')}
+              ('deep_exclusions', 'host_watch', 'feed', 'tiers', 'dns_api', 'upnp', 'tailscale_funnel', 'level', 'model_url', 'advisory_log', 'ntfy', 'report_max_age_days', 'report_max_count')}
     public.setdefault('model', 'dolphin3:8b')
     c['_fingerprint'] = hashlib.sha256(json.dumps(public, sort_keys=True).encode()).hexdigest()
     return c
@@ -235,7 +240,7 @@ def wireguard_selection(approved, known, deep):
             narrow, wide = sorted((scope, network), key=lambda subnet: subnet.num_addresses)
             candidates = narrow.hosts() if deep else map(ipaddress.IPv4Address, known)
             targets.update(str(ip) for ip in candidates if usable_address(ip, narrow) and usable_address(ip, wide))
-    missing = deep and any(not all(str(ip) in targets for ip in scope.hosts()) for scope in approved)
+    missing = [scope for scope in approved if deep and not all(str(ip) in targets for ip in scope.hosts())]
     return targets, missing
 
 
@@ -247,6 +252,9 @@ def target_input(targets, via_stdin):
 
 
 def scan(c, profile='deep', baseline=None, top_ports=None, *, observed_peers=()):
+    if profile == 'deep' and 'deep_exclusions' not in c:
+        raise ScopeError('Set deep_exclusions before a deep scan. Use [] if every scoped target may be probed.')
+    excluded = set(c['deep_exclusions']) if profile == 'deep' else set()
     if c['_lan'].version != 4 or any(':' in ip for ip in c['hosts'].values()):
         return {}, [finding('coverage', component='lan_discovery', error_type='UnsupportedAddressFamily')]
     names = {ip: host for host, ip in c['hosts'].items()}
@@ -263,25 +271,31 @@ def scan(c, profile='deep', baseline=None, top_ports=None, *, observed_peers=())
     if c['_wireguard_ipv4'] and (profile == 'deep' or wireguard_known):
         try:
             wireguard, missing = wireguard_selection(c['_wireguard_ipv4'], wireguard_known, profile == 'deep')
-            if missing:
-                errors.append(finding('coverage', component='wireguard_discovery'))
+            errors.extend(finding('coverage', component='wireguard_discovery', network=str(scope)) for scope in missing)
         except (ValueError, TypeError, KeyError, AttributeError):
             errors.append(finding('coverage', component='wireguard_discovery'))
-    candidates = ordinary | peers | wireguard
-    via_stdin = bool(candidates - ordinary)
+    candidates = (ordinary | peers | wireguard) - excluded
+    via_stdin = bool(excluded or candidates - ordinary)
     discovered = {}
-    if profile == 'deep' and c['_lan'].prefixlen != 32:
+    lan -= excluded
+    can_probe = bool(lan or candidates)
+    errors.extend(finding('coverage', component='deep_excluded', ip=ip, optional=can_probe)
+                  for ip in sorted(excluded))
+    if profile == 'deep' and lan and c['_lan'].prefixlen != 32:
         try:
-            discovered = parse_nmap(command(DISCOVERY + [str(c['_lan'])], 90), lan)
+            args, stdin = target_input(lan, True) if excluded else ([str(c['_lan'])], {})
+            discovered = parse_nmap(command(DISCOVERY + args, 90, **stdin), lan)
         except SCAN_ERRORS as error:
             return {}, errors + [finding('coverage', component='lan_discovery', error_type=type(error).__name__)]
-    try:
-        discovery_args, discovery_input = target_input(candidates, via_stdin)
-        reachable = parse_nmap(command(DISCOVERY + discovery_args, 90, **discovery_input), candidates)
-    except SCAN_ERRORS as error:
-        return {}, errors + [finding('coverage', component='host_discovery', error_type=type(error).__name__)]
+    reachable = {}
+    if candidates:
+        try:
+            discovery_args, discovery_input = target_input(candidates, via_stdin)
+            reachable = parse_nmap(command(DISCOVERY + discovery_args, 90, **discovery_input), candidates)
+        except SCAN_ERRORS as error:
+            return {}, errors + [finding('coverage', component='host_discovery', error_type=type(error).__name__)]
     targets = set(discovered) | set(reachable)
-    errors.extend(finding('coverage', component='host_offline', **({'host': names[ip]} if ip in names else {}), ip=ip, optional=names.get(ip) in c['optional_hosts']) for ip in sorted(known - targets))
+    errors.extend(finding('coverage', component='host_offline', **({'host': names[ip]} if ip in names else {}), ip=ip, optional=names.get(ip) in c['optional_hosts']) for ip in sorted(known - targets - excluded))
     if not targets:
         return {}, errors
     if profile == 'deep':

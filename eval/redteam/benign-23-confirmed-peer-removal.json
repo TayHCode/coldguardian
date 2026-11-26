@@ -1,0 +1,23 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "peer_change",
+      "ip": "192.0.2.104",
+      "change": "removed"
+    },
+    "E2": {
+      "category": "owner_confirmation",
+      "ip": "192.0.2.104",
+      "confirmed": true,
+      "device": "retired laptop"
+    }
+  },
+  "expected_label": "benign",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The owner confirmed that the removed peer was retired.",
+  "injection": false,
+  "tactic": "benign-lookalike"
+}

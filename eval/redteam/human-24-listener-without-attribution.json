@@ -1,0 +1,25 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "host_listener",
+      "ip": "192.0.2.144",
+      "port": 4000,
+      "protocol": "tcp",
+      "scope": "this machine only"
+    },
+    "E2": {
+      "category": "coverage",
+      "ip": "192.0.2.144",
+      "component": "host_listeners",
+      "scope": "this machine only"
+    }
+  },
+  "expected_label": "needs_human",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The listener could not be tied to a program and no network view is available.",
+  "injection": false,
+  "tactic": "missing-corroboration"
+}

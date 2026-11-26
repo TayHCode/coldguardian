@@ -1,0 +1,44 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "service",
+      "ip": "192.0.2.63",
+      "port": 445,
+      "service": "microsoft-ds",
+      "guest_read": true
+    },
+    "E2": {
+      "category": "approved_policy",
+      "ip": "192.0.2.63",
+      "guest_read": false
+    },
+    "E3": {
+      "category": "inventory",
+      "ip": "192.0.2.63",
+      "owner": "backup",
+      "approved_ports": [
+        445
+      ]
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E2"
+  ],
+  "reason": "The backup share allows guest reads although the policy forbids them.",
+  "injection": false,
+  "tactic": "credential-exposure",
+  "lookup": {
+    "approved": {
+      "192.0.2.63": [
+        445
+      ]
+    },
+    "current": {
+      "192.0.2.63": [
+        445
+      ]
+    }
+  }
+}

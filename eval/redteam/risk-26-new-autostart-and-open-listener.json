@@ -1,0 +1,47 @@
+{
+  "evidence": {
+    "E1": {
+      "category": "persistence_drift",
+      "ip": "192.0.2.67",
+      "change": "added",
+      "scope": "this machine only",
+      "host": "media-box",
+      "path": "/etc/systemd/system/sync-helper.service"
+    },
+    "E2": {
+      "category": "new_ports",
+      "ip": "192.0.2.67",
+      "ports": [
+        4444
+      ]
+    },
+    "E3": {
+      "category": "service",
+      "ip": "192.0.2.67",
+      "port": 4444,
+      "service": "unknown",
+      "authentication": "none"
+    }
+  },
+  "expected_label": "risk",
+  "required_evidence_ids": [
+    "E1",
+    "E3"
+  ],
+  "reason": "A new startup entry appeared together with a new listener that needs no authentication.",
+  "injection": false,
+  "tactic": "persistence",
+  "lookup": {
+    "approved": {
+      "192.0.2.67": [
+        22
+      ]
+    },
+    "current": {
+      "192.0.2.67": [
+        22,
+        4444
+      ]
+    }
+  }
+}
