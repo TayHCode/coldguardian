@@ -5,6 +5,26 @@ discovers devices on a configured LAN, checks TCP ports, and reports changes
 against a baseline you approve. It also summarizes configured DNS and Linux
 authentication logs. It leaves network settings and monitored devices unchanged.
 
+No telemetry. Scans probe only your configured private LAN and approved
+Tailscale or WireGuard peers. Everything else is opt-in and goes only where
+you configure it: ntfy alerts, the threat-feed download, and a private-address
+model server, AdGuard Home or Pi-hole query log API, or UPnP router.
+
+A report flags a device that was not in your approved baseline:
+
+```text
+# Attention needed
+
+- New device observed at 192.168.1.23. Next step: identify it and review inventory before approving it. [new_device, E2]
+- New open TCP ports at 192.168.1.23: 22, 8080. Next step: review these ports and the device owner. [new_ports, E3]
+
+## Coverage
+
+- Scan observed 4 hosts. Network scan complete; log coverage complete across 0 sources. [scan_summary, E1]
+
+Proposed actions require human review. No actions executed.
+```
+
 ## Install and run
 
 Use Linux with Python 3.11 or newer, Python's `venv` and `pip`, Nmap,
@@ -18,12 +38,16 @@ python3 -m venv "$HOME/.venvs/coldguardian"
 . "$HOME/.venvs/coldguardian/bin/activate"
 ```
 
-Install Coldguardian and check that the CLI starts.
+Install Coldguardian, check that the CLI starts and print a sample report.
+`demo` needs no configuration or Nmap. It scans nothing and writes no files.
 
 ```sh
 python3 -m pip install --no-input .
 coldguardian --help
+coldguardian demo
 ```
+
+A real scan needs a configuration, so run `coldguardian setup` first.
 
 Run `coldguardian setup` as your regular user. Review the proposed LAN and
 any overlay scope before you approve it. Scan only devices and networks
@@ -68,7 +92,9 @@ with `systemctl --user disable --now coldguardian-quick.timer` (also
 ### Uninstall
 
 Back up your configuration and any reports or approvals you want to keep.
-`coldguardian uninstall` permanently removes the following:
+`coldguardian uninstall` permanently removes the setup-managed files below.
+It leaves any other `output_dir`, such as `/var/lib/coldguardian` from a
+hand-written configuration. Delete that directory yourself.
 
 - The setup-managed `coldguardian-quick` and `coldguardian-deep` user timers and
   services in `$XDG_CONFIG_HOME/systemd/user` (default `~/.config/systemd/user`).
@@ -76,8 +102,9 @@ Back up your configuration and any reports or approvals you want to keep.
   timer timestamps. If the units exist, uninstall needs the running systemd
   user manager.
 - `~/.config/coldguardian/config.json` and its parent directory if empty.
-- The entire `~/.local/state/coldguardian` directory, including reports,
-  baselines, finding approvals, and cached data stored there.
+- The entire `~/.local/state/coldguardian` directory, the `output_dir` that
+  setup writes, including reports, baselines, finding approvals, and cached
+  data stored there.
 
 After removing setup state, run `python3 -m pip uninstall coldguardian` in
 the active virtual environment to remove the CLI. If you installed with
@@ -88,7 +115,11 @@ pipx, use `pipx uninstall coldguardian`.
 `setup`, `uninstall`, `feeds update`, and `status` accept `--json`. For example, run
 `coldguardian setup --json` to receive one [JSON outcome](docs/command-outcome.schema.json)
 on stdout. Setup still asks for confirmation and sends its scan summary to
-stderr. With `--json`, uninstall and feeds update also send their progress
+stderr. `coldguardian setup --json --yes` asks nothing and reads no input. It
+accepts the detected scope, the Medium level without timers or a deep
+inventory, no model and no phone alerts, then approves the first quick scan
+as the baseline. It fails without scanning if a saved configuration already
+exists. Use `--yes` only when the owner of the network has agreed. With `--json`, uninstall and feeds update also send their progress
 lines to stderr. Setup JSON outcomes include `schema_version: 1`. With piped stdin,
 `setup --json` waits up to two seconds for each answer line, then returns
 `canceled` if the line is incomplete. Plain `setup` waits for your answer
@@ -146,7 +177,7 @@ devices, and unread log data.
 | `local_host` | Optional host name from `hosts` for local DNS and Linux authentication logs. |
 | `optional_hosts` | Names from `hosts` with expected downtime. Downtime still appears in reports. |
 | `ports` | TCP ports and ranges for deep scans, such as `22,80,8000-8100`. Defaults to `1-65535`, all TCP. |
-| `output_dir` | Absolute directory for private reports and state. Defaults to `/var/lib/coldguardian`. |
+| `output_dir` | Absolute directory for private reports and state. Setup writes `~/.local/state/coldguardian` as an absolute path. A hand-written configuration without this key uses `/var/lib/coldguardian`, which the scanner account must be able to write. |
 | `dns_paths`, `auth_paths` | Absolute paths to logs on the scanner. These paths enable local log collection. |
 | `suspicious_domains` | Optional domains or suffixes to flag in DNS logs. |
 | `feed` | Optional source for the local URL and DNS feed cache. |
@@ -213,14 +244,19 @@ approved, and 2 means the command could not save an approval.
 
 ### Default local model
 
-The default for configured explanations is Qwen3.5-27B Q4_K_M. Use llama.cpp
-build `b12359` (`b1b770d90`) and verify the GGUF SHA-256 against the
-LFS object ID on the pinned model page.
-[Pinned GGUF](https://huggingface.co/gguf/Qwen3.5-27B-GGUF/blob/5a8fa4f/qwen3.5-27b-Q4_K_M.gguf)
+The default for configured explanations is Qwen3.5-27B Q4_K_M. The
+[pinned GGUF](https://huggingface.co/gguf/Qwen3.5-27B-GGUF/blob/5a8fa4f/qwen3.5-27b-Q4_K_M.gguf)
+is a 17,984,872,928-byte (about 18 GB) download. Serving it at a 16K context
+needs a GPU with 24 GB of memory, or about 24 GB of free RAM on a CPU-only
+host, which answers much more slowly. Use llama.cpp build `b12359`
+(`b1b770d90`). Before serving the file, check that `sha256sum` prints
+`81657841d62f1821c748d0fea6c260b7d3508844fe4e9250253ef81c4e4d9edf`.
+On a CPU-only host, drop `--gpu-layers all`.
 
-```powershell
-llama-server --model qwen3.5-27b-Q4_K_M.gguf --alias Qwen3.5-27B-Q4_K_M `
-  --host ([System.Net.IPAddress]::Loopback.ToString()) --port 8080 --device CUDA0 --gpu-layers all `
+```sh
+sha256sum qwen3.5-27b-Q4_K_M.gguf
+llama-server --model qwen3.5-27b-Q4_K_M.gguf --alias Qwen3.5-27B-Q4_K_M \
+  --host 127.0.0.1 --port 8080 --gpu-layers all \
   --ctx-size 16384 --parallel 1 --jinja --reasoning off
 ```
 

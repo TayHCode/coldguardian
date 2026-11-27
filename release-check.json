@@ -1,15 +1,24 @@
 {
-  "exclude": ["training", "tests/test_training.py"],
+  "exclude": [
+    "training", "tests/test_training.py",
+    "docs/build-rules.md", "docs/build-status.md", "docs/v1-plan.md", "docs/north-star.md",
+    ".github/workflows/tests.yml"
+  ],
   "quickstart": [
     {
       "file": "README.md",
-      "line": 24,
+      "line": 45,
       "argv": ["python3", "-m", "pip", "install", "--no-input", "."]
     },
     {
       "file": "README.md",
-      "line": 25,
+      "line": 46,
       "argv": ["coldguardian", "--help"]
+    },
+    {
+      "file": "README.md",
+      "line": 47,
+      "argv": ["coldguardian", "demo"]
     }
   ],
   "checks": [

@@ -153,6 +153,42 @@ class SetupTest(unittest.TestCase):
                 self.assertIn('10.20.30.2', diagnostics.getvalue())
         self.assertTrue((wizard.setup_state() / 'baseline.json').is_file())
 
+    def test_setup_json_yes_accepts_defaults_without_reading_input(self):
+        with (patch.object(sys.stdin, 'isatty', return_value=True),
+              patch.object(wizard, 'getpass', side_effect=AssertionError('prompted')),
+              contextlib.redirect_stderr(io.StringIO()) as diagnostics):
+            self.assertEqual(self.scan_with(args=('setup', '--json', '--yes')), 0)
+        outcome = json.loads(self.output.getvalue())
+        self.assertEqual(outcome, {'schema_version': 1, 'command': 'setup', 'status': 'ok', 'exit_code': 0})
+        self.assertIn('Approve this scope? [y/N] y', diagnostics.getvalue())
+        saved = json.loads(wizard.setup_config().read_text())
+        self.assertEqual((saved['level'], saved['model_url'], saved['ntfy']), ('medium', None, None))
+        self.assertEqual(json.loads((wizard.setup_state() / 'baseline.json').read_text())['hosts'], {'10.20.30.2': [22]})
+
+    def test_setup_json_yes_refuses_a_saved_configuration_without_scanning(self):
+        path = wizard.setup_config()
+        path.parent.mkdir(parents=True)
+        wizard.write_config(path, dict(SCOPE, output_dir=str(wizard.setup_state())))
+        with (patch('coldguardian.scan.command', side_effect=AssertionError('probed')) as nmap,
+              patch('builtins.input', side_effect=AssertionError('prompted')),
+              contextlib.redirect_stderr(io.StringIO()) as diagnostics):
+            self.assertEqual(cli.main(['setup', '--json', '--yes']), 2)
+        nmap.assert_not_called()
+        self.assertEqual(json.loads(self.output.getvalue()),
+                         {'schema_version': 1, 'command': 'setup', 'status': 'failed', 'exit_code': 2})
+        self.assertIn('without --yes', diagnostics.getvalue())
+        self.assertFalse(wizard.setup_state().exists())
+
+    def test_demo_prints_a_sample_report_without_nmap_config_or_writes(self):
+        result = subprocess.run(
+            [sys.executable, '-m', 'coldguardian.cli', 'demo'], capture_output=True, text=True, timeout=30,
+            cwd=Path(__file__).resolve().parents[1], env=dict(os.environ, PATH=str(Path.home())),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('New device observed at 192.168.1.23.', result.stdout)
+        self.assertIn('Nothing was scanned', result.stdout)
+        self.assertEqual(list(Path.home().iterdir()), [])
+
     def uninstall_json(self, code, status):
         self.output.seek(0)
         self.output.truncate()

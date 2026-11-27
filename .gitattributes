@@ -2,3 +2,8 @@ eval/cases/*.json text eol=lf
 eval/redteam/*.json text eol=lf
 training export-ignore
 tests/test_training.py export-ignore
+docs/build-rules.md export-ignore
+docs/build-status.md export-ignore
+docs/v1-plan.md export-ignore
+docs/north-star.md export-ignore
+.github/workflows/tests.yml export-ignore

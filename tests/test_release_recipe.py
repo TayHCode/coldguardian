@@ -13,6 +13,7 @@ class ReleaseRecipeTests(unittest.TestCase):
         commands = [
             ['python3', '-m', 'pip', 'install', '--no-input', '.'],
             ['coldguardian', '--help'],
+            ['coldguardian', 'demo'],
         ]
         self.assertEqual([item['argv'] for item in manifest['quickstart']], commands)
         for item, argv in zip(manifest['quickstart'], commands):

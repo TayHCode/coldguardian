@@ -187,6 +187,12 @@ def _json_answer(prompt):
     raise EOFError
 
 
+def _accept_defaults(prompt):
+    reply = 'y' if prompt.endswith('[y/N] ') else ''
+    print(prompt + reply)
+    return reply
+
+
 def _new_scope(answer):
     settings = detect_scope()
     print(f"LAN: {settings['lan_cidr']}")
@@ -202,7 +208,7 @@ def _new_scope(answer):
     return settings
 
 
-def _finish_config(path, settings, level, answer):
+def _finish_config(path, settings, level, answer, *, hide_input=True):
     model = answer('Local model URL (use a private IP or localhost), or none [none]: ').strip()
     print('Phone alerts (ntfy):')
     print('  blank TOPIC           Public ntfy.sh receives a generic alert. Details stay on this scanner.')
@@ -210,7 +216,7 @@ def _finish_config(path, settings, level, answer):
     print('  full TOPIC            Public ntfy.sh receives internal addresses, host labels, ports, counts and timing.')
     print('Delivery time and topic are visible to the server in every mode.')
     prompt = 'Choose a phone alert option, or none [none]: '
-    ntfy = (getpass(prompt) if sys.stdin.isatty() else answer(prompt)).split()
+    ntfy = (getpass(prompt) if hide_input and sys.stdin.isatty() else answer(prompt)).split()
     if ntfy in ([], ['none']):
         target = None
     elif len(ntfy) == 2 and ntfy[0] in ('blank', 'full'):
@@ -232,8 +238,8 @@ def _finish_config(path, settings, level, answer):
     return settings_checked
 
 
-def setup(run, *, json_output=False):
-    answer = _json_answer if json_output else input
+def setup(run, *, json_output=False, yes=False):
+    answer = _accept_defaults if yes else _json_answer if json_output else input
     path = setup_config()
     if path.is_symlink() or path.parent.is_symlink():
         raise ValueError('Review the setup configuration path: it contains a symbolic link.')
@@ -242,6 +248,8 @@ def setup(run, *, json_output=False):
             raise ValueError(f'Setup requires {program}. Install {package} and rerun coldguardian setup.')
 
     resume = path.exists()
+    if resume and yes:
+        raise ValueError(f'setup --yes only creates a new configuration. Review {path} and rerun coldguardian setup without --yes.')
     if resume:
         raw = json.loads(path.read_text())
         if not isinstance(raw, dict):
@@ -269,7 +277,7 @@ def setup(run, *, json_output=False):
         print('To keep timers running after logout, enable lingering for your user.')
         check_user_manager()
     if not resume:
-        settings = _finish_config(path, settings, level, answer)
+        settings = _finish_config(path, settings, level, answer, hide_input=not yes)
 
     def confirm():
         return answer('Approve this scan as the baseline? [y/N] ').strip().lower() in ('y', 'yes')

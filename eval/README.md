@@ -25,7 +25,7 @@ must change, add a new version and its aggregate hash to `CASE_SET_HASHES`.
 The hash error prints the digest of the changed set.
 
 Each of three repeats records the class counts, case results and checks from
-the [v1 plan](../docs/v1-plan.md#model-test-set-and-pass-bar). Evidence support
+the pass bar in `score()` in `run_eval.py`. Evidence support
 is 0 for zero required citations, 1 for some, and 2 for all. Latency includes
 any lookup round trips and uses the nearest-rank 95th percentile. The JSON
 records the prompt, schema, tools and sampling settings sent by the runner.

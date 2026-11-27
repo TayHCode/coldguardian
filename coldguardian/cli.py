@@ -21,7 +21,8 @@ from .endpoints import validate_ntfy
 from .levels import DEFAULT_LEVEL, LEVELS
 from .lookups import LookupContext
 from .report import (
-    JournalCorruption, atomic_json, journal_rows, load_json, report, safe_finding, saved_finding, scan_document,
+    ARCHIVE_STAMP, JournalCorruption, atomic_json, journal_rows, load_json, report, report_text, safe_finding,
+    saved_finding, scan_document,
 )
 from .scan import config, finding, lan_macs, scan, valid_ip
 from .scope import ScopeError, tailscale_address
@@ -583,7 +584,7 @@ def management_command(args):
         else:
             try:
                 if command == 'setup':
-                    code, status = wizard.setup(run, json_output=args.json)
+                    code, status = wizard.setup(run, json_output=args.json, yes=args.yes)
                 else:
                     code, status = wizard.uninstall(), 'ok'
             except (EOFError, KeyboardInterrupt):
@@ -680,14 +681,24 @@ def status_command(args):
     return code
 
 
+DEMO_FINDINGS = (
+    finding('scan_summary', host_count=4, network_complete=True, log_sources=0, log_coverage_complete=True),
+    finding('new_device', ip='192.168.1.23'),
+    finding('new_ports', ip='192.168.1.23', ports=[22, 8080]),
+)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config')
     commands = parser.add_subparsers(dest='feed_command')
     setup = commands.add_parser('setup', help='Configure Coldguardian and approve the first scan')
     setup.add_argument('--json', action='store_true', help='Print the outcome as JSON')
+    setup.add_argument('--yes', action='store_true',
+                       help='Accept the detected scope, Medium level, no model, no phone alerts and the first baseline without prompting')
     uninstall = commands.add_parser('uninstall', help='Remove setup-managed units, configuration, and state')
     uninstall.add_argument('--json', action='store_true', help='Print the outcome as JSON')
+    commands.add_parser('demo', help='Print a sample report without scanning or writing files')
     status = commands.add_parser('status', help='Check local configuration without scanning')
     status.add_argument('--config', default=argparse.SUPPRESS)
     status.add_argument('--json', action='store_true')
@@ -719,6 +730,12 @@ def main(argv=None):
     modes.add_argument('--quick', action='store_true', help='scan known hosts on baseline ports (default)')
     modes.add_argument('--deep', action='store_true', help='scan the whole scope, all TCP ports, with service names; takes minutes')
     args = parser.parse_args(argv)
+    if args.feed_command == 'demo':
+        if args.config or args.approve_baseline or args.test_notification or args.notify_failure or args.quick or args.deep:
+            parser.error('demo cannot be combined with other modes')
+        print('Sample report. Nothing was scanned and no files were written.\n')
+        print(report_text(DEMO_FINDINGS, {}, datetime.now(timezone.utc).strftime(ARCHIVE_STAMP)), end='')
+        return 0
     if args.feed_command == 'status':
         if args.approve_baseline or args.test_notification or args.notify_failure or args.quick or args.deep:
             parser.error('status cannot be combined with another mode')
